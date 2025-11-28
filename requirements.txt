@@ -3,4 +3,7 @@ pandas
 firebase-admin
 google-cloud-firestore
 openpyxl
+
 xlsxwriter
+requests
+2.  **Bucket Adı:** Koddaki 17. satırda bulunan `FIREBASE_STORAGE_BUCKET = 'SİZİN_STORAGE_BUCKET_ADINIZ.appspot.com'` kısmını kendi Firebase Storage bucket adınızla değiştirin (Firebase Konsolu -> Storage bölümünün üstünde yazar).
