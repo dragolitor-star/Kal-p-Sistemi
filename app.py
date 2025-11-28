@@ -74,7 +74,7 @@ def base64_to_image(base64_str):
 def process_base64_to_dxf(base64_img_str):
     """
     Base64 formatındaki görseli işler ve DXF Base64 verisi döndürür.
-    GÜNCELLEME: Metin kaybını önlemek için Morfolojik erozyon kaldırıldı, hassasiyet artırıldı.
+    GÜNCELLEME: 2x Upscaling ve Smoothing ile 'tırtıksız' sonuç hedeflendi.
     """
     # 1. Base64'ten OpenCV formatına çevir
     img_data = base64.b64decode(base64_img_str)
@@ -84,22 +84,27 @@ def process_base64_to_dxf(base64_img_str):
     if img is None:
         raise ValueError("Görüntü okunamadı.")
 
-    # 2. Görüntü İşleme (Metin Dostu Hassas Yöntem)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # --- YENİ ADIM: UPSCALING (Çözünürlük Artırma) ---
+    # Görüntüyü 2 katına çıkarıyoruz. Bu, pikselleşmeyi azaltır ve kontürlerin daha yumuşak dönmesini sağlar.
+    scale_factor = 2
+    img_resized = cv2.resize(img, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
+
+    # 2. Görüntü İşleme
+    gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
     
-    # Gürültü azaltma (Bilateral Filter)
-    # Kenarları koruyarak yumuşatma yapar. 
-    # Kernel boyutu 5'e çekildi, böylece ince yazılar bulanıklaşıp kaybolmayacak.
-    filtered = cv2.bilateralFilter(gray, 5, 75, 75)
+    # Gaussian Blur: Piksel köşelerini yumuşatmak için.
+    # Upscale yaptığımız için kernel boyutunu biraz artırabiliriz (5x5 iyidir).
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     
     # Otsu Thresholding
-    # Otomatik eşikleme yapar. 
-    # NOT: Önceki versiyondaki "Morphological Open" işlemi metni sildiği için TAMAMEN kaldırıldı.
-    ret, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    ret, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Morphological Close: Ufak kopuklukları birleştirir
+    kernel = np.ones((3,3), np.uint8)
+    closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
 
     # Kontürleri bul
-    # RETR_TREE modu iç içe şekilleri (harflerin içindeki boşluklar gibi) yakalar.
-    contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    contours, hierarchy = cv2.findContours(closing, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     
     # 3. DXF Oluşturma
     doc = ezdxf.new()
@@ -108,19 +113,21 @@ def process_base64_to_dxf(base64_img_str):
     total_lines = 0
     
     for contour in contours:
-        # Alan filtresini düşürdük (100 -> 15)
-        # Böylece harfler ("S", "P", "R" vb.) ve küçük detaylar silinmeyecek.
-        # Sadece çok küçük noktalar (toz) elenecek.
-        if cv2.contourArea(contour) < 15: 
+        # Alan filtresi (Upscale olduğu için limiti de scale_factor^2 ile çarpmalıyız)
+        # Orjinalde 15 ise, 2x zoomda 60 olur. Gürültüyü temizler.
+        if cv2.contourArea(contour) < (15 * scale_factor * scale_factor): 
             continue
             
         # Pürüzsüzleştirme (Contour Approximation)
-        # Hassasiyeti korumak için epsilon düşük tutuldu (0.001).
-        epsilon = 0.001 * cv2.arcLength(contour, True)
+        # Epsilon değeri: Çizgilerin ne kadar 'köşeli' olacağını belirler.
+        # Düşük değer = Daha çok detay (kavisli), Yüksek değer = Daha düz çizgiler.
+        # 0.0005 çok hassas bir değerdir, orjinale sadık kalır.
+        epsilon = 0.0005 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
         
         # Noktaları DXF formatına uygun listeye çevir
-        points = [(float(pt[0][0]), float(-pt[0][1])) for pt in approx]
+        # ÖNEMLİ: Upscale yaptığımız için koordinatları tekrar küçültmeliyiz (/ scale_factor)
+        points = [(float(pt[0][0])/scale_factor, float(-pt[0][1])/scale_factor) for pt in approx]
         
         # Çizgiyi kapat (closed loop)
         if len(points) > 2:
@@ -261,7 +268,7 @@ def operator_view():
                 # --- DURUM 1: ONAY VE DXF OLUŞTURMA ---
                 if req.get('status') == "Onay Bekliyor":
                     if st.button("✅ Onayla ve DXF Oluştur", key=f"btn_dxf_{req['id']}"):
-                        with st.spinner("Görüntü işleniyor (Metin Koruyucu Mod)..."):
+                        with st.spinner("Görüntü işleniyor (Yüksek Çözünürlüklü Mod)..."):
                             try:
                                 # Doğrudan Base64 verisi üzerinden işlem yapıyoruz
                                 dxf_base64 = process_base64_to_dxf(req.get('image_data'))
