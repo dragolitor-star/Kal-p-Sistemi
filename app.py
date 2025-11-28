@@ -74,7 +74,7 @@ def base64_to_image(base64_str):
 def process_base64_to_dxf(base64_img_str):
     """
     Base64 formatındaki görseli işler ve DXF Base64 verisi döndürür.
-    GÜNCELLEME: 2x Upscaling ve Smoothing ile 'tırtıksız' sonuç hedeflendi.
+    GÜNCELLEME: 4x Upscaling ve Bilateral Filter ile maksimum pürüzsüzlük.
     """
     # 1. Base64'ten OpenCV formatına çevir
     img_data = base64.b64decode(base64_img_str)
@@ -84,23 +84,24 @@ def process_base64_to_dxf(base64_img_str):
     if img is None:
         raise ValueError("Görüntü okunamadı.")
 
-    # --- YENİ ADIM: UPSCALING (Çözünürlük Artırma) ---
-    # Görüntüyü 2 katına çıkarıyoruz. Bu, pikselleşmeyi azaltır ve kontürlerin daha yumuşak dönmesini sağlar.
-    scale_factor = 2
+    # --- YENİ ADIM: ULTRA UPSCALING (4x) ---
+    # Görüntüyü 4 katına çıkarıyoruz. Bu, merdiven etkisini (aliasing) ciddi oranda azaltır.
+    scale_factor = 4
     img_resized = cv2.resize(img, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
 
     # 2. Görüntü İşleme
     gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
     
-    # Gaussian Blur: Piksel köşelerini yumuşatmak için.
-    # Upscale yaptığımız için kernel boyutunu biraz artırabiliriz (5x5 iyidir).
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    # Bilateral Filter: Kenarları keskin tutarken yüzeydeki titremeyi yok eder.
+    # d=9, sigmaColor=75, sigmaSpace=75 standart iyi değerlerdir.
+    blurred = cv2.bilateralFilter(gray, 9, 75, 75)
     
     # Otsu Thresholding
     ret, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    # Morphological Close: Ufak kopuklukları birleştirir
-    kernel = np.ones((3,3), np.uint8)
+    # Morphological Close: Kopuklukları birleştirir.
+    # Upscale yaptığımız için kernel boyutunu büyüttük (3x3 -> 5x5)
+    kernel = np.ones((5,5), np.uint8)
     closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
 
     # Kontürleri bul
@@ -113,20 +114,19 @@ def process_base64_to_dxf(base64_img_str):
     total_lines = 0
     
     for contour in contours:
-        # Alan filtresi (Upscale olduğu için limiti de scale_factor^2 ile çarpmalıyız)
-        # Orjinalde 15 ise, 2x zoomda 60 olur. Gürültüyü temizler.
+        # Alan filtresi (Upscale oranına göre ayarlandı: 15 * 4^2 = 240)
+        # Çok küçük tozları eler.
         if cv2.contourArea(contour) < (15 * scale_factor * scale_factor): 
             continue
             
         # Pürüzsüzleştirme (Contour Approximation)
-        # Epsilon değeri: Çizgilerin ne kadar 'köşeli' olacağını belirler.
-        # Düşük değer = Daha çok detay (kavisli), Yüksek değer = Daha düz çizgiler.
-        # 0.0005 çok hassas bir değerdir, orjinale sadık kalır.
-        epsilon = 0.0005 * cv2.arcLength(contour, True)
+        # Epsilon değerini 0.0010'a çıkardık. 
+        # Bu, çok küçük titremeleri (shaky lines) düzleştirir, daha akıcı bir çizgi sağlar.
+        epsilon = 0.0010 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
         
         # Noktaları DXF formatına uygun listeye çevir
-        # ÖNEMLİ: Upscale yaptığımız için koordinatları tekrar küçültmeliyiz (/ scale_factor)
+        # Koordinatları tekrar orijinal boyutuna (scale_factor'e bölerek) döndürüyoruz.
         points = [(float(pt[0][0])/scale_factor, float(-pt[0][1])/scale_factor) for pt in approx]
         
         # Çizgiyi kapat (closed loop)
