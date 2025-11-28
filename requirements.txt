@@ -1,9 +1,8 @@
 streamlit
-pandas
+opencv-python-headless
+numpy
+ezdxf
 firebase-admin
-google-cloud-firestore
-openpyxl
-
-xlsxwriter
+Pillow
 requests
 
