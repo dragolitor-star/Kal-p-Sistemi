@@ -74,7 +74,7 @@ def base64_to_image(base64_str):
 def process_base64_to_dxf(base64_img_str):
     """
     Base64 formatındaki görseli işler ve DXF Base64 verisi döndürür.
-    GÜNCELLEME: Canny Kenar Tespiti kullanılarak iyileştirildi.
+    GÜNCELLEME: Adaptive Threshold, Morfolojik İşlemler ve Pürüzsüzleştirme eklendi.
     """
     # 1. Base64'ten OpenCV formatına çevir
     img_data = base64.b64decode(base64_img_str)
@@ -84,23 +84,32 @@ def process_base64_to_dxf(base64_img_str):
     if img is None:
         raise ValueError("Görüntü okunamadı.")
 
-    # 2. Görüntü İşleme (Canny Yöntemi)
+    # 2. Görüntü İşleme (Gelişmiş Yöntem)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Gürültü azaltma (Blur) - Çok fazla blur ince çizgileri yok edebilir, (3,3) ideal.
-    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    # Gürültü azaltma (Gaussian Blur)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     
-    # Canny Kenar Tespiti:
-    # 50 ve 150 eşik değerleridir. Çizgileriniz çok silikse bunları (30, 100) gibi düşürebilirsiniz.
-    edges = cv2.Canny(blurred, 50, 150)
+    # Adaptive Thresholding: 
+    # Bu yöntem, görüntünün farklı bölgelerindeki ışık değişimlerine uyum sağlar.
+    # cv2.THRESH_BINARY_INV kullanıyoruz çünkü OpenCV kontürleri beyaz nesneler üzerinde arar.
+    # Genelde kağıt beyaz (255), çizim siyahtır (0). INV ile çizimi beyaz (255) yapıyoruz.
+    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY_INV, 11, 2)
+                                   
+    # Morfolojik İşlemler (Kopuklukları Giderme)
+    # Kernel boyutu çizgi kalınlığına göre artırılabilir (3x3 standarttır)
+    kernel = np.ones((3,3), np.uint8)
     
+    # Morphological Close: Küçük delikleri ve kopuklukları kapatır
+    closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+    
+    # (Opsiyonel) Dilation: Çizgileri biraz daha kalınlaştırıp birleştirmek isterseniz:
+    # closing = cv2.dilate(closing, kernel, iterations=1)
+
     # Kontürleri bul
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Eğer hiç kontür bulunamadıysa eşikleri düşürüp tekrar dene (Fallback)
-    if not contours:
-        edges = cv2.Canny(blurred, 10, 50)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # RETR_TREE: İç içe geçmiş şekilleri (örn: 'O' harfinin içi) hiyerarşik olarak bulur.
+    contours, hierarchy = cv2.findContours(closing, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     
     # 3. DXF Oluşturma
     doc = ezdxf.new()
@@ -109,13 +118,19 @@ def process_base64_to_dxf(base64_img_str):
     total_lines = 0
     
     for contour in contours:
-        # Çok küçük gürültüleri atla (örn: toz zerresi gibi noktalar)
-        if cv2.contourArea(contour) < 5: 
+        # Gürültü filtresi (çok küçük lekeleri atla)
+        if cv2.contourArea(contour) < 20: 
             continue
             
+        # Pürüzsüzleştirme (Contour Approximation)
+        # epsilon değeri ne kadar büyükse çizgi o kadar "basitleşir" ve düzleşir.
+        # ArcLength'in %0.2'si (0.002) hassas bir düzeltme sağlar. Daha köşeli isterseniz 0.01 deneyebilirsiniz.
+        epsilon = 0.002 * cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        
         # Noktaları DXF formatına uygun listeye çevir
         # OpenCV (row, col) -> DXF (x, y). Ayrıca DXF'te Y yukarı artar.
-        points = [(float(pt[0][0]), float(-pt[0][1])) for pt in contour]
+        points = [(float(pt[0][0]), float(-pt[0][1])) for pt in approx]
         
         # Çizgiyi kapat (closed loop)
         if len(points) > 1:
@@ -256,7 +271,7 @@ def operator_view():
                 # --- DURUM 1: ONAY VE DXF OLUŞTURMA ---
                 if req.get('status') == "Onay Bekliyor":
                     if st.button("✅ Onayla ve DXF Oluştur", key=f"btn_dxf_{req['id']}"):
-                        with st.spinner("Görüntü işleniyor (Canny Edge Detection)..."):
+                        with st.spinner("Görüntü işleniyor (Gelişmiş Vektörizasyon)..."):
                             try:
                                 # Doğrudan Base64 verisi üzerinden işlem yapıyoruz
                                 dxf_base64 = process_base64_to_dxf(req.get('image_data'))
