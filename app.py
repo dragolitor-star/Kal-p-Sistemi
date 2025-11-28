@@ -74,7 +74,7 @@ def base64_to_image(base64_str):
 def process_base64_to_dxf(base64_img_str):
     """
     Base64 formatındaki görseli işler ve DXF Base64 verisi döndürür.
-    GÜNCELLEME: Otsu Thresholding ve Bilateral Filter ile daha temiz sonuç.
+    GÜNCELLEME: Metin kaybını önlemek için Morfolojik erozyon kaldırıldı, hassasiyet artırıldı.
     """
     # 1. Base64'ten OpenCV formatına çevir
     img_data = base64.b64decode(base64_img_str)
@@ -84,29 +84,22 @@ def process_base64_to_dxf(base64_img_str):
     if img is None:
         raise ValueError("Görüntü okunamadı.")
 
-    # 2. Görüntü İşleme (Clean Line Art Yöntemi)
+    # 2. Görüntü İşleme (Metin Dostu Hassas Yöntem)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
     # Gürültü azaltma (Bilateral Filter)
-    # Bu filtre kenarları keskin tutarken yüzey gürültüsünü azaltır.
-    filtered = cv2.bilateralFilter(gray, 9, 75, 75)
+    # Kenarları koruyarak yumuşatma yapar. 
+    # Kernel boyutu 5'e çekildi, böylece ince yazılar bulanıklaşıp kaybolmayacak.
+    filtered = cv2.bilateralFilter(gray, 5, 75, 75)
     
-    # Otsu Thresholding:
-    # Görüntüdeki histograma bakarak siyah ve beyaz ayrımını otomatik yapar.
-    # THRESH_BINARY_INV: Beyaz kağıdı siyah, siyah kalemi beyaz yapar (OpenCV beyazı arar).
+    # Otsu Thresholding
+    # Otomatik eşikleme yapar. 
+    # NOT: Önceki versiyondaki "Morphological Open" işlemi metni sildiği için TAMAMEN kaldırıldı.
     ret, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                                   
-    # Morfolojik İşlemler (Gürültü Temizleme)
-    kernel = np.ones((3,3), np.uint8)
-    
-    # Opening: Önce erozyon sonra genişletme yaparak küçük beyaz noktaları (gürültüyü) yok eder.
-    opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
-    
-    # Dilation: Çizgileri biraz belirginleştirip kopuklukları birleştirir.
-    dilated = cv2.dilate(opening, kernel, iterations=1)
 
-    # Kontürleri bul (RETR_LIST daha sade sonuç verebilir, ama iç içe şekiller için TREE iyidir)
-    contours, hierarchy = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # Kontürleri bul
+    # RETR_TREE modu iç içe şekilleri (harflerin içindeki boşluklar gibi) yakalar.
+    contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     
     # 3. DXF Oluşturma
     doc = ezdxf.new()
@@ -115,15 +108,15 @@ def process_base64_to_dxf(base64_img_str):
     total_lines = 0
     
     for contour in contours:
-        # Gürültü filtresini artırdık (20 -> 100)
-        # Ekrandaki o küçük rastgele şekillerin çoğu 100 pikselden küçüktür.
-        if cv2.contourArea(contour) < 100: 
+        # Alan filtresini düşürdük (100 -> 15)
+        # Böylece harfler ("S", "P", "R" vb.) ve küçük detaylar silinmeyecek.
+        # Sadece çok küçük noktalar (toz) elenecek.
+        if cv2.contourArea(contour) < 15: 
             continue
             
         # Pürüzsüzleştirme (Contour Approximation)
-        # Epsilon değerini düşürdük (0.002 -> 0.0005). 
-        # Bu, çizgilerin "kırık kırık" değil, daha kavisli ve originale sadık olmasını sağlar.
-        epsilon = 0.0005 * cv2.arcLength(contour, True)
+        # Hassasiyeti korumak için epsilon düşük tutuldu (0.001).
+        epsilon = 0.001 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
         
         # Noktaları DXF formatına uygun listeye çevir
@@ -135,7 +128,7 @@ def process_base64_to_dxf(base64_img_str):
             total_lines += 1
             
     if total_lines == 0:
-        raise ValueError("Görselden anlamlı bir çizgi çıkarılamadı. Lütfen görselin net ve yüksek kontrastlı olduğundan emin olun.")
+        raise ValueError("Görselden anlamlı bir çizgi çıkarılamadı.")
 
     # 4. Geçici dosyaya kaydetmeden bellekte byte olarak al
     with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
@@ -268,7 +261,7 @@ def operator_view():
                 # --- DURUM 1: ONAY VE DXF OLUŞTURMA ---
                 if req.get('status') == "Onay Bekliyor":
                     if st.button("✅ Onayla ve DXF Oluştur", key=f"btn_dxf_{req['id']}"):
-                        with st.spinner("Görüntü işleniyor (Otsu Thresholding)..."):
+                        with st.spinner("Görüntü işleniyor (Metin Koruyucu Mod)..."):
                             try:
                                 # Doğrudan Base64 verisi üzerinden işlem yapıyoruz
                                 dxf_base64 = process_base64_to_dxf(req.get('image_data'))
