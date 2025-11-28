@@ -74,7 +74,7 @@ def base64_to_image(base64_str):
 def process_base64_to_dxf(base64_img_str):
     """
     Base64 formatındaki görseli işler ve DXF Base64 verisi döndürür.
-    GÜNCELLEME: Adaptive Threshold, Morfolojik İşlemler ve Pürüzsüzleştirme eklendi.
+    GÜNCELLEME: Otsu Thresholding ve Bilateral Filter ile daha temiz sonuç.
     """
     # 1. Base64'ten OpenCV formatına çevir
     img_data = base64.b64decode(base64_img_str)
@@ -84,32 +84,29 @@ def process_base64_to_dxf(base64_img_str):
     if img is None:
         raise ValueError("Görüntü okunamadı.")
 
-    # 2. Görüntü İşleme (Gelişmiş Yöntem)
+    # 2. Görüntü İşleme (Clean Line Art Yöntemi)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Gürültü azaltma (Gaussian Blur)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    # Gürültü azaltma (Bilateral Filter)
+    # Bu filtre kenarları keskin tutarken yüzey gürültüsünü azaltır.
+    filtered = cv2.bilateralFilter(gray, 9, 75, 75)
     
-    # Adaptive Thresholding: 
-    # Bu yöntem, görüntünün farklı bölgelerindeki ışık değişimlerine uyum sağlar.
-    # cv2.THRESH_BINARY_INV kullanıyoruz çünkü OpenCV kontürleri beyaz nesneler üzerinde arar.
-    # Genelde kağıt beyaz (255), çizim siyahtır (0). INV ile çizimi beyaz (255) yapıyoruz.
-    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                   cv2.THRESH_BINARY_INV, 11, 2)
+    # Otsu Thresholding:
+    # Görüntüdeki histograma bakarak siyah ve beyaz ayrımını otomatik yapar.
+    # THRESH_BINARY_INV: Beyaz kağıdı siyah, siyah kalemi beyaz yapar (OpenCV beyazı arar).
+    ret, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                                    
-    # Morfolojik İşlemler (Kopuklukları Giderme)
-    # Kernel boyutu çizgi kalınlığına göre artırılabilir (3x3 standarttır)
+    # Morfolojik İşlemler (Gürültü Temizleme)
     kernel = np.ones((3,3), np.uint8)
     
-    # Morphological Close: Küçük delikleri ve kopuklukları kapatır
-    closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+    # Opening: Önce erozyon sonra genişletme yaparak küçük beyaz noktaları (gürültüyü) yok eder.
+    opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
     
-    # (Opsiyonel) Dilation: Çizgileri biraz daha kalınlaştırıp birleştirmek isterseniz:
-    # closing = cv2.dilate(closing, kernel, iterations=1)
+    # Dilation: Çizgileri biraz belirginleştirip kopuklukları birleştirir.
+    dilated = cv2.dilate(opening, kernel, iterations=1)
 
-    # Kontürleri bul
-    # RETR_TREE: İç içe geçmiş şekilleri (örn: 'O' harfinin içi) hiyerarşik olarak bulur.
-    contours, hierarchy = cv2.findContours(closing, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # Kontürleri bul (RETR_LIST daha sade sonuç verebilir, ama iç içe şekiller için TREE iyidir)
+    contours, hierarchy = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     
     # 3. DXF Oluşturma
     doc = ezdxf.new()
@@ -118,22 +115,22 @@ def process_base64_to_dxf(base64_img_str):
     total_lines = 0
     
     for contour in contours:
-        # Gürültü filtresi (çok küçük lekeleri atla)
-        if cv2.contourArea(contour) < 20: 
+        # Gürültü filtresini artırdık (20 -> 100)
+        # Ekrandaki o küçük rastgele şekillerin çoğu 100 pikselden küçüktür.
+        if cv2.contourArea(contour) < 100: 
             continue
             
         # Pürüzsüzleştirme (Contour Approximation)
-        # epsilon değeri ne kadar büyükse çizgi o kadar "basitleşir" ve düzleşir.
-        # ArcLength'in %0.2'si (0.002) hassas bir düzeltme sağlar. Daha köşeli isterseniz 0.01 deneyebilirsiniz.
-        epsilon = 0.002 * cv2.arcLength(contour, True)
+        # Epsilon değerini düşürdük (0.002 -> 0.0005). 
+        # Bu, çizgilerin "kırık kırık" değil, daha kavisli ve originale sadık olmasını sağlar.
+        epsilon = 0.0005 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
         
         # Noktaları DXF formatına uygun listeye çevir
-        # OpenCV (row, col) -> DXF (x, y). Ayrıca DXF'te Y yukarı artar.
         points = [(float(pt[0][0]), float(-pt[0][1])) for pt in approx]
         
         # Çizgiyi kapat (closed loop)
-        if len(points) > 1:
+        if len(points) > 2:
             msp.add_lwpolyline(points, close=True)
             total_lines += 1
             
@@ -271,7 +268,7 @@ def operator_view():
                 # --- DURUM 1: ONAY VE DXF OLUŞTURMA ---
                 if req.get('status') == "Onay Bekliyor":
                     if st.button("✅ Onayla ve DXF Oluştur", key=f"btn_dxf_{req['id']}"):
-                        with st.spinner("Görüntü işleniyor (Gelişmiş Vektörizasyon)..."):
+                        with st.spinner("Görüntü işleniyor (Otsu Thresholding)..."):
                             try:
                                 # Doğrudan Base64 verisi üzerinden işlem yapıyoruz
                                 dxf_base64 = process_base64_to_dxf(req.get('image_data'))
