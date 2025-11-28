@@ -6,46 +6,34 @@ import tempfile
 import os
 import time
 from datetime import datetime
-import requests
-import json # JSON işlemleri için
+import json
+import base64
+from PIL import Image
+import io
 
 # --- FIREBASE BAŞLATMA ---
 import firebase_admin
-from firebase_admin import credentials, firestore, storage
+from firebase_admin import credentials, firestore
 
-# DİKKAT: Buraya kendi Storage Bucket adınızı yazmalısınız.
-FIREBASE_STORAGE_BUCKET = 'SİZİN_STORAGE_BUCKET_ADINIZ.appspot.com'
+# NOT: Storage bucket kullanımı kaldırıldı.
+# Sadece Firestore (Veritabanı) kullanılacak.
 
 if not firebase_admin._apps:
     # YÖNTEM 1: Streamlit Cloud Secrets (Github Dağıtımı İçin)
-    # Streamlit Cloud'da 'Secrets' bölümüne tanımlanan bilgileri kullanır.
     if 'firebase' in st.secrets:
-        # st.secrets bir AttrDict döner, bunu normal dict'e çevirip sertifika oluşturuyoruz
         key_dict = dict(st.secrets["firebase"])
-        
-        # Private key içindeki \n karakterlerini düzeltmek gerekebilir
-        # (Streamlit bazen string olarak okurken kaçış karakterlerini değiştirebilir)
-        # key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-        
         cred = credentials.Certificate(key_dict)
-        
-        firebase_admin.initialize_app(cred, {
-            'storageBucket': FIREBASE_STORAGE_BUCKET
-        })
+        firebase_admin.initialize_app(cred) # storageBucket parametresi kaldırıldı
         
     # YÖNTEM 2: Yerel Dosya (Local Test İçin)
-    # Eğer secrets yoksa ve yerelde serviceAccountKey.json varsa onu kullanır.
     elif os.path.exists("serviceAccountKey.json"):
         cred = credentials.Certificate("serviceAccountKey.json")
-        firebase_admin.initialize_app(cred, {
-            'storageBucket': FIREBASE_STORAGE_BUCKET
-        })
+        firebase_admin.initialize_app(cred) # storageBucket parametresi kaldırıldı
     else:
         st.error("Firebase kimlik bilgileri bulunamadı! Lütfen Secrets ayarlarını yapın veya serviceAccountKey.json dosyasını ekleyin.")
         st.stop()
 
 db = firestore.client()
-bucket = storage.bucket()
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -54,23 +42,50 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- YARDIMCI FONKSİYONLAR (GÖRÜNTÜ İŞLEME) ---
-def process_image_to_dxf(image_bytes):
+# --- YARDIMCI FONKSİYONLAR ---
+
+def compress_image_to_base64(uploaded_file):
     """
-    Byte formatındaki görsel verisini işler ve DXF byte verisi döndürür.
+    Firestore 1MB limitine takılmamak için resmi küçültür ve Base64'e çevirir.
     """
-    # 1. Byte verisini OpenCV formatına çevir
-    nparr = np.frombuffer(image_bytes, np.uint8)
+    image = Image.open(uploaded_file)
+    
+    # Resmi RGB'ye çevir (PNG transparanlık sorununu önlemek için)
+    if image.mode in ("RGBA", "P"):
+        image = image.convert("RGB")
+        
+    # Boyutlandırma (Max 1024px)
+    image.thumbnail((1024, 1024))
+    
+    # JPEG olarak sıkıştır
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='JPEG', quality=60) # %60 kalite genelde yeterlidir
+    img_byte_arr = img_byte_arr.getvalue()
+    
+    # Base64'e çevir
+    base64_str = base64.b64encode(img_byte_arr).decode('utf-8')
+    return base64_str
+
+def base64_to_image(base64_str):
+    """Base64 stringini PIL Image objesine çevirir."""
+    img_data = base64.b64decode(base64_str)
+    return Image.open(io.BytesIO(img_data))
+
+def process_base64_to_dxf(base64_img_str):
+    """
+    Base64 formatındaki görseli işler ve DXF Base64 verisi döndürür.
+    """
+    # 1. Base64'ten OpenCV formatına çevir
+    img_data = base64.b64decode(base64_img_str)
+    nparr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
     if img is None:
         raise ValueError("Görüntü okunamadı.")
 
-    # Görüntü işleme adımları (Gri ton -> Blur -> Kenar Bulma)
+    # Görüntü işleme adımları
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # Otomatik eşikleme (Otsu's method) veya Canny
     ret, thresh = cv2.threshold(blurred, 127, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
@@ -79,76 +94,59 @@ def process_image_to_dxf(image_bytes):
     msp = doc.modelspace()
     
     for contour in contours:
-        # Gürültü filtreleme (çok küçük alanları atla)
         if cv2.contourArea(contour) < 100:
             continue
-            
-        # Noktaları DXF formatına uygun listeye çevir
-        # Not: DXF'de Y ekseni yukarı bakar, resimde aşağı. Y'yi ters çeviriyoruz.
         points = [(float(pt[0][0]), float(-pt[0][1])) for pt in contour]
-        
-        # Çizgiyi kapat (closed loop)
         if len(points) > 2:
             msp.add_lwpolyline(points, close=True)
             
-    # 3. Geçici dosyaya kaydetmeden bellekte byte olarak döndür
+    # 3. Geçici dosyaya kaydetmeden bellekte byte olarak al
     with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
         doc.saveas(tmp.name)
         tmp.seek(0)
-        dxf_data = tmp.read()
+        dxf_bytes = tmp.read()
         
-    # Geçici dosyayı temizle
     os.unlink(tmp.name)
     
-    return dxf_data
+    # DXF'i Base64 string'e çevirip döndür
+    return base64.b64encode(dxf_bytes).decode('utf-8')
 
 # --- VERİTABANI YÖNETİCİSİ (DB MANAGER) ---
 class DataManager:
-    """Sadece Firebase işlemleri."""
+    """Storage kullanmadan sadece Firestore işlemleri."""
     
     @staticmethod
     def add_request(user_email, description, image_file):
         status = "Onay Bekliyor"
         created_at = datetime.now()
         
-        # 1. Resmi Storage'a yükle
-        # Benzersiz bir dosya adı oluştur
-        filename = f"{int(time.time())}_{image_file.name}"
-        blob = bucket.blob(f"uploads/{filename}")
+        # Resmi sıkıştır ve base64 string olarak al
+        image_base64 = compress_image_to_base64(image_file)
         
-        blob.upload_from_file(image_file, content_type=image_file.type)
-        blob.make_public()
-        image_url = blob.public_url
-        
-        # 2. Veritabanına yaz
+        # Veritabanına yaz (Resim verisi doğrudan 'image_data' alanına yazılıyor)
         doc_ref = db.collection('requests').document()
         doc_ref.set({
             'requester': user_email,
             'description': description,
-            'image_url': image_url,
+            'image_data': image_base64, # URL yerine veri
             'status': status,
             'created_at': created_at,
-            'dxf_url': None
+            'dxf_data': None
         })
 
     @staticmethod
     def get_requests():
-        # Tarihe göre tersten sırala (en yeni en üstte)
         docs = db.collection('requests').order_by('created_at', direction=firestore.Query.DESCENDING).stream()
         return [{"id": doc.id, **doc.to_dict()} for doc in docs]
 
     @staticmethod
-    def update_status_and_dxf(req_id, new_status, dxf_bytes=None):
+    def update_status_and_dxf(req_id, new_status, dxf_base64=None):
         doc_ref = db.collection('requests').document(req_id)
         update_data = {'status': new_status}
         
-        if dxf_bytes:
-            # DXF dosyasını Storage'a yükle
-            blob_path = f"generated/{req_id}.dxf"
-            blob = bucket.blob(blob_path)
-            blob.upload_from_string(dxf_bytes, content_type="application/dxf")
-            blob.make_public()
-            update_data['dxf_url'] = blob.public_url
+        if dxf_base64:
+            # DXF verisini de doğrudan veritabanına yaz
+            update_data['dxf_data'] = dxf_base64
             
         doc_ref.update(update_data)
 
@@ -157,9 +155,8 @@ class DataManager:
 def sidebar_menu():
     st.sidebar.title("Lazer Yönetim v1.0")
     
-    # Bağlantı durumu kontrolü
     if firebase_admin._apps:
-        st.sidebar.success("🟢 Firebase Bağlı")
+        st.sidebar.success("🟢 Firestore Bağlı")
     else:
         st.sidebar.error("🔴 Bağlantı Hatası")
         
@@ -180,9 +177,12 @@ def business_unit_view():
         if submitted:
             if uploaded_file and email:
                 uploaded_file.seek(0)
-                with st.spinner("Dosya yükleniyor..."):
-                    DataManager.add_request(email, desc, uploaded_file)
-                st.success("Talep başarıyla oluşturuldu! Operatör onayına düştü.")
+                with st.spinner("Dosya sıkıştırılıyor ve kaydediliyor..."):
+                    try:
+                        DataManager.add_request(email, desc, uploaded_file)
+                        st.success("Talep başarıyla oluşturuldu! Operatör onayına düştü.")
+                    except Exception as e:
+                        st.error(f"Hata oluştu: {str(e)}")
             else:
                 st.error("Lütfen e-posta girin ve bir dosya yükleyin.")
 
@@ -190,7 +190,6 @@ def business_unit_view():
     st.subheader("📋 Taleplerim")
     requests_data = DataManager.get_requests()
     
-    # Basit tablo gösterimi
     if requests_data:
         st.dataframe([
             {"Tarih": r.get('created_at'), "Açıklama": r.get('description'), "Durum": r.get('status')} 
@@ -217,7 +216,13 @@ def operator_view():
             
             with col1:
                 st.caption("Gelen Görsel:")
-                st.image(req.get('image_url'), use_container_width=True)
+                img_data = req.get('image_data')
+                if img_data:
+                    try:
+                        image = base64_to_image(img_data)
+                        st.image(image, use_container_width=True)
+                    except:
+                        st.error("Görsel yüklenemedi.")
             
             with col2:
                 st.info(f"Talep Eden: {req.get('requester')}")
@@ -226,23 +231,15 @@ def operator_view():
                 # --- DURUM 1: ONAY VE DXF OLUŞTURMA ---
                 if req.get('status') == "Onay Bekliyor":
                     if st.button("✅ Onayla ve DXF Oluştur", key=f"btn_dxf_{req['id']}"):
-                        with st.spinner("Görüntü indiriliyor ve vektöre çevriliyor..."):
+                        with st.spinner("Görüntü işleniyor..."):
                             try:
-                                # 1. Storage'dan resmi indir
-                                response = requests.get(req.get('image_url'))
-                                if response.status_code == 200:
-                                    image_bytes = response.content
-                                    
-                                    # 2. İşle
-                                    dxf_bytes = process_image_to_dxf(image_bytes)
-                                    
-                                    # 3. Güncelle
-                                    DataManager.update_status_and_dxf(req['id'], "Hazırlık (DXF İndirilebilir)", dxf_bytes)
-                                    st.success("DXF başarıyla oluşturuldu ve yüklendi!")
-                                    time.sleep(1)
-                                    st.rerun()
-                                else:
-                                    st.error("Görüntü indirilemedi. Bağlantıyı kontrol edin.")
+                                # Doğrudan Base64 verisi üzerinden işlem yapıyoruz
+                                dxf_base64 = process_base64_to_dxf(req.get('image_data'))
+                                
+                                DataManager.update_status_and_dxf(req['id'], "Hazırlık (DXF İndirilebilir)", dxf_base64)
+                                st.success("DXF veritabanına kaydedildi!")
+                                time.sleep(1)
+                                st.rerun()
                             except Exception as e:
                                 st.error(f"Bir hata oluştu: {str(e)}")
 
@@ -250,12 +247,20 @@ def operator_view():
                 elif "Hazırlık" in req.get('status'):
                     st.success("DXF Dosyası Hazır.")
                     
-                    dxf_url = req.get('dxf_url')
-                    if dxf_url:
-                        st.link_button("⬇️ DXF Dosyasını İndir (Tarayıcıda Aç)", dxf_url)
+                    dxf_data = req.get('dxf_data')
+                    if dxf_data:
+                        # Base64 string'i byte'a çevirip indirilebilir yapıyoruz
+                        dxf_bytes = base64.b64decode(dxf_data)
+                        
+                        st.download_button(
+                            label="⬇️ DXF Dosyasını İndir",
+                            data=dxf_bytes,
+                            file_name=f"kalip_{req['id']}.dxf",
+                            mime="application/dxf"
+                        )
                         
                         st.markdown("---")
-                        st.write("👉 **Operatör Talimatı:** Dosyayı indirin, RDWorks'te lazer ayarlarını yapın ve makineye gönderin.")
+                        st.write("👉 **Operatör Talimatı:** Dosyayı indirin, RDWorks'te lazer ayarlarını yapın.")
                         
                         if st.button("🏁 Üretimi Tamamla ve Arşivle", key=f"btn_fin_{req['id']}"):
                             DataManager.update_status_and_dxf(req['id'], "Tamamlandı")
