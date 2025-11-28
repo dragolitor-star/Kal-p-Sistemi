@@ -23,12 +23,12 @@ if not firebase_admin._apps:
     if 'firebase' in st.secrets:
         key_dict = dict(st.secrets["firebase"])
         cred = credentials.Certificate(key_dict)
-        firebase_admin.initialize_app(cred) # storageBucket parametresi kaldırıldı
+        firebase_admin.initialize_app(cred) 
         
     # YÖNTEM 2: Yerel Dosya (Local Test İçin)
     elif os.path.exists("serviceAccountKey.json"):
         cred = credentials.Certificate("serviceAccountKey.json")
-        firebase_admin.initialize_app(cred) # storageBucket parametresi kaldırıldı
+        firebase_admin.initialize_app(cred)
     else:
         st.error("Firebase kimlik bilgileri bulunamadı! Lütfen Secrets ayarlarını yapın veya serviceAccountKey.json dosyasını ekleyin.")
         st.stop()
@@ -74,6 +74,7 @@ def base64_to_image(base64_str):
 def process_base64_to_dxf(base64_img_str):
     """
     Base64 formatındaki görseli işler ve DXF Base64 verisi döndürür.
+    GÜNCELLEME: Canny Kenar Tespiti kullanılarak iyileştirildi.
     """
     # 1. Base64'ten OpenCV formatına çevir
     img_data = base64.b64decode(base64_img_str)
@@ -83,24 +84,48 @@ def process_base64_to_dxf(base64_img_str):
     if img is None:
         raise ValueError("Görüntü okunamadı.")
 
-    # Görüntü işleme adımları
+    # 2. Görüntü İşleme (Canny Yöntemi)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    ret, thresh = cv2.threshold(blurred, 127, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # 2. DXF Oluşturma
+    # Gürültü azaltma (Blur) - Çok fazla blur ince çizgileri yok edebilir, (3,3) ideal.
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    
+    # Canny Kenar Tespiti:
+    # 50 ve 150 eşik değerleridir. Çizgileriniz çok silikse bunları (30, 100) gibi düşürebilirsiniz.
+    edges = cv2.Canny(blurred, 50, 150)
+    
+    # Kontürleri bul
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Eğer hiç kontür bulunamadıysa eşikleri düşürüp tekrar dene (Fallback)
+    if not contours:
+        edges = cv2.Canny(blurred, 10, 50)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # 3. DXF Oluşturma
     doc = ezdxf.new()
     msp = doc.modelspace()
     
+    total_lines = 0
+    
     for contour in contours:
-        if cv2.contourArea(contour) < 100:
+        # Çok küçük gürültüleri atla (örn: toz zerresi gibi noktalar)
+        if cv2.contourArea(contour) < 5: 
             continue
-        points = [(float(pt[0][0]), float(-pt[0][1])) for pt in contour]
-        if len(points) > 2:
-            msp.add_lwpolyline(points, close=True)
             
-    # 3. Geçici dosyaya kaydetmeden bellekte byte olarak al
+        # Noktaları DXF formatına uygun listeye çevir
+        # OpenCV (row, col) -> DXF (x, y). Ayrıca DXF'te Y yukarı artar.
+        points = [(float(pt[0][0]), float(-pt[0][1])) for pt in contour]
+        
+        # Çizgiyi kapat (closed loop)
+        if len(points) > 1:
+            msp.add_lwpolyline(points, close=True)
+            total_lines += 1
+            
+    if total_lines == 0:
+        raise ValueError("Görselden anlamlı bir çizgi çıkarılamadı. Lütfen görselin net ve yüksek kontrastlı olduğundan emin olun.")
+
+    # 4. Geçici dosyaya kaydetmeden bellekte byte olarak al
     with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
         doc.saveas(tmp.name)
         tmp.seek(0)
@@ -231,7 +256,7 @@ def operator_view():
                 # --- DURUM 1: ONAY VE DXF OLUŞTURMA ---
                 if req.get('status') == "Onay Bekliyor":
                     if st.button("✅ Onayla ve DXF Oluştur", key=f"btn_dxf_{req['id']}"):
-                        with st.spinner("Görüntü işleniyor..."):
+                        with st.spinner("Görüntü işleniyor (Canny Edge Detection)..."):
                             try:
                                 # Doğrudan Base64 verisi üzerinden işlem yapıyoruz
                                 dxf_base64 = process_base64_to_dxf(req.get('image_data'))
@@ -240,6 +265,8 @@ def operator_view():
                                 st.success("DXF veritabanına kaydedildi!")
                                 time.sleep(1)
                                 st.rerun()
+                            except ValueError as ve:
+                                st.warning(str(ve))
                             except Exception as e:
                                 st.error(f"Bir hata oluştu: {str(e)}")
 
