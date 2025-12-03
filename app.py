@@ -267,10 +267,21 @@ def new_control_page(user):
         st.divider()
         st.subheader(f"Sonuçlar: {st.session_state['current_model'].get('parca_adi', 'Bilinmeyen Parça')}")
         
-        st.dataframe(df_final.style.format("{:.2f}").applymap(
-            lambda x: 'background-color: #ffcccc' if isinstance(x, (int, float)) and abs(x) > tolerans else '',
-            subset=['Fark_Boy', 'Fark_En', 'Fark_Cevre']
-        ))
+        # --- TABLO GÖSTERİMİ DÜZELTİLDİ ---
+        # Sayısal olmayan "Beden" sütununun format hatası vermemesi için
+        # sadece sayısal sütunları seçiyoruz.
+        
+        numeric_cols = ['boy', 'poly_boy', 'en', 'poly_en', 'cevre', 'poly_cevre', 'Fark_Boy', 'Fark_En', 'Fark_Cevre']
+        existing_numeric_cols = [col for col in numeric_cols if col in df_final.columns]
+
+        st.dataframe(
+            df_final.style
+            .format("{:.2f}", subset=existing_numeric_cols) # Sadece sayılara format uygula
+            .map(
+                lambda x: 'background-color: #ffcccc' if isinstance(x, (int, float)) and abs(x) > tolerans else '',
+                subset=['Fark_Boy', 'Fark_En', 'Fark_Cevre']
+            )
+        )
 
         if hata_var:
             st.error(f"⚠️ DİKKAT: {len(hatali_satirlar)} bedende ölçü farkı tespit edildi!")
@@ -394,4 +405,3 @@ def history_page():
 
 if __name__ == "__main__":
     main()
-
