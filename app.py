@@ -305,7 +305,8 @@ def main():
     if 'analysis_results' not in st.session_state:
         st.session_state['analysis_results'] = {}
     if 'excel_metadata' not in st.session_state:
-        st.session_state['excel_metadata'] = {}
+        # HATA DÜZELTME: Başlangıçta boş sözlük değil, varsayılan değerleri içeren sözlük tanımlıyoruz.
+        st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
 
     st.title("🏭 Kalıp Ölçü Kontrol Sistemi")
     st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3022/3022329.png", width=100)
@@ -356,17 +357,13 @@ def excel_control_page(user):
                     detected_model = "Bilinmiyor"
                     detected_season = "Bilinmiyor"
                     
-                    # Gerber sayfasında 'L.../...' formatlı ilk başlığı arıyoruz
                     found_meta = False
                     for idx, row in df_gerber.iterrows():
                         row_str = row.astype(str).tolist()
                         if "Boyut" in row_str:
                             indices = [i for i, x in enumerate(row_str) if x == "Boyut"]
                             if indices:
-                                # Boyut'un hemen yanındaki hücreye bak (örn: L1/UTJW-DW0DW22280-SP26-OBAS)
                                 header_cell = str(df_gerber.iloc[idx, indices[0]+1])
-                                # Regex ile Model ve Sezon'u al
-                                # Opsiyonel L\d+/ kısmı, sonra Model, sonra Sezon
                                 match = re.search(r"(?:L\d+\/)?([\w-]+)-([A-Z]{2}\d{2})-([A-Z0-9]+)", header_cell)
                                 if match:
                                     detected_model = match.group(1)
@@ -375,7 +372,6 @@ def excel_control_page(user):
                                     break
                         if found_meta: break
                     
-                    # Metadata'yı session'a kaydet
                     st.session_state['excel_metadata'] = {
                         'model': detected_model,
                         'season': detected_season
@@ -420,13 +416,14 @@ def excel_control_page(user):
     # --- SONUÇLARI GÖSTER VE KAYDET ---
     if st.session_state.get('excel_analysis_results'):
         results = st.session_state['excel_analysis_results']
+        # HATA DÜZELTME: .get() kullanılarak key error önlendi
         meta = st.session_state.get('excel_metadata', {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'})
         
         st.divider()
         st.subheader("📊 Analiz Sonuçları")
 
-        # Otomatik Çekilen Bilgileri Göster
-        st.info(f"📌 **Tespit Edilen Model:** {meta['model']} | **Sezon:** {meta['season']}")
+        # HATA DÜZELTME: Güvenli erişim
+        st.info(f"📌 **Tespit Edilen Model:** {meta.get('model', 'Bilinmiyor')} | **Sezon:** {meta.get('season', 'Bilinmiyor')}")
 
         parts_to_save = []
         genel_durum_list = []
@@ -482,24 +479,28 @@ def excel_control_page(user):
                 
             genel_durum = "Hatalı" if "Hatalı" in genel_durum_list else "Doğru Çevrilmiş"
             
+            # HATA DÜZELTME: Kaydederken meta verisini güvenli çekme
+            model_to_save = meta.get('model', 'Bilinmiyor')
+            season_to_save = meta.get('season', 'Bilinmiyor')
+            
             doc_ref = db.collection('qc_records').document()
             doc_ref.set({
                 'kullanici': user,
                 'tarih': datetime.now(),
                 'business_unit': business_unit,
-                'model_adi': meta['model'],
-                'sezon': meta['season'],
+                'model_adi': model_to_save,
+                'sezon': season_to_save,
                 'parca_sayisi': len(parts_to_save),
                 'genel_durum': genel_durum,
                 'parca_detaylari': parts_to_save
             })
             
             st.balloons()
-            st.success(f"{meta['model']} ({meta['season']}) modeli için tüm parçalar kaydedildi!")
+            st.success(f"{model_to_save} ({season_to_save}) modeli için tüm parçalar kaydedildi!")
             
-            # State temizle
+            # State temizle (Varsayılan değerlere döndür)
             st.session_state['excel_analysis_results'] = []
-            st.session_state['excel_metadata'] = {}
+            st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
             st.rerun()
 
 def new_control_page(user):
