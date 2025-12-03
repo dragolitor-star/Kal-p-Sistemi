@@ -160,7 +160,6 @@ def extract_part_name_from_header(header_text):
         return None
     
     # Regex: Parça adını (OBAS, A, B vb.) almak için
-    # Model ve Sezon formatı: ABC...-SP26-PARCA
     pattern = r"([A-Z0-9]+-[A-Z0-9]+-[A-Z]{2}\d{2}-)([A-Z0-9]+)"
     match = re.search(pattern, header_text)
     if match:
@@ -170,34 +169,21 @@ def extract_part_name_from_header(header_text):
 def parse_excel_gerber_sheet(df):
     """
     Gerber sayfasını tarar ve parça parça verileri çıkarır.
-    Varsayım: 3 Tablo yan yana durur (Çevre, En, Boy).
     """
     parts_data = {}
     
-    # Tablo başlıklarının olduğu satırları bul (İçinde 'Boyut' geçen satırlar)
-    # Genellikle başlık satırında birden fazla 'Boyut' olur.
-    
-    # Tüm dataframe'i satır satır gezmek yerine, 'Boyut' içeren satırları bulalım
     for idx, row in df.iterrows():
-        # Satırdaki değerleri stringe çevirip 'Boyut' arayalım
         row_str = row.astype(str).tolist()
         if "Boyut" in row_str:
-            # Bu bir başlık satırı olabilir.
-            # Yan yana 3 blok olup olmadığını kontrol et.
             indices = [i for i, x in enumerate(row_str) if x == "Boyut"]
             
             if len(indices) >= 3:
-                # 3 Blok bulduk: 1. Çevre, 2. En (Y Mes), 3. Boy (X Mes) varsayıyoruz
-                # Başlık satırından parça ismini çıkaralım (Genellikle Boyut'un yanındaki hücrede L1/... yazar)
-                
-                # Blok 1 Başlığı (Çevre)
                 header_cell = str(df.iloc[idx, indices[0]+1])
                 part_name = extract_part_name_from_header(header_cell)
                 
                 if not part_name:
                     continue
                     
-                # Veri satırlarını oku (Bir sonraki boş satıra veya yeni 'Boyut'a kadar)
                 current_row = idx + 1
                 part_measurements = []
                 
@@ -205,36 +191,20 @@ def parse_excel_gerber_sheet(df):
                     vals = df.iloc[current_row]
                     beden_raw = str(vals[indices[0]])
                     
-                    # Eğer beden hücresi boşsa veya yeni bir başlık geldiyse dur
                     if pd.isna(vals[indices[0]]) or beden_raw == "Boyut" or beden_raw == "nan":
                         break
                         
                     beden = beden_raw.replace("*", "").strip()
                     
-                    # --- 1. ÇEVRE (Blok 1) ---
-                    # Blok 1'deki sayısal değerlerin maksimumu "Toplam"dır.
-                    # Blok 1 aralığı: indices[0] ile indices[1] arası (veya makul bir genişlik)
+                    # 1. ÇEVRE
                     block1_vals = vals[indices[0]+1 : indices[1]].tolist()
                     cevre = 0.0
                     nums1 = [clean_number(x) for x in block1_vals if isinstance(x, (int, float, str))]
                     if nums1:
                         cevre = max(nums1)
 
-                    # --- 2. EN (Blok 2 - Y Mesafe) ---
-                    # Manuel fonksiyondaki mantık: Y Mesafe (Genellikle 3. veya 4. sayısal sütun)
-                    # Blok 2 aralığı: indices[1] ile indices[2] arası
-                    # CSV'de yapı: Boyut, M1, X, XF, Y, YF, Toplam
-                    # Y Mesafe, 'Boyut' kolonundan +4 index ötede olabilir.
-                    # Daha güvenli: Blok içindeki değerleri al, Y Mesafe mantığını uygula
-                    # Y Mesafe (En) genelde büyük değerdir, X Mesafe (Boy) 0'a yakındır.
-                    block2_vals = vals[indices[1]+1 : indices[2]].tolist()
+                    # 2. EN
                     en = 0.0
-                    nums2 = [clean_number(x) for x in block2_vals if isinstance(x, (int, float, str))]
-                    
-                    # Logic: M1, X, Y... -> Y genelde listedeki 3. elemandır (Index 2) veya sondan öncekidir.
-                    # Ancak Excel'den okurken boş hücreler gelebilir.
-                    # En güvenlisi: 'Y Mesafe' başlığını bulmak ama satır bazlı gidiyoruz.
-                    # Kolon yapısı sabitse: Boyut(0), M1(1), X(2), XF(3), Y(4) -> Index 4
                     try:
                         col_y = indices[1] + 4
                         if col_y < df.shape[1]:
@@ -242,9 +212,7 @@ def parse_excel_gerber_sheet(df):
                     except:
                         pass
                         
-                    # --- 3. BOY (Blok 3 - X Mesafe) ---
-                    # Blok 3 aralığı: indices[2] sonuna kadar
-                    # Kolon yapısı: Boyut(0), M1(1), X(2)... -> Index 2
+                    # 3. BOY
                     boy = 0.0
                     try:
                         col_x = indices[2] + 2
@@ -270,25 +238,19 @@ def parse_excel_gerber_sheet(df):
 def parse_excel_pp_sheet(df):
     """
     Polypattern sayfasını tarar.
-    Yapı: Parça Adı (Header), Boy, En, Çevre
     """
     parts_data = {}
     
-    # 'Boy', 'En', 'Çevre' başlıklarını bul
     for idx, row in df.iterrows():
         row_str = [str(x).strip() for x in row.tolist()]
         
         if "Boy" in row_str and "En" in row_str and "Çevre" in row_str:
-            # Başlık satırı bulundu. Parça adı genellikle bu satırın ilk sütunundadır.
             part_header = str(row.iloc[0])
             part_name = extract_part_name_from_header(part_header)
             
             if not part_name:
-                # Bazen parça adı header'da olmayabilir, bir üst satırda olabilir mi?
-                # Şimdilik header'da olduğunu varsayalım (CSV örneğine göre)
                 continue
             
-            # Kolon indekslerini bul
             try:
                 col_boy = row_str.index("Boy")
                 col_en = row_str.index("En")
@@ -303,22 +265,13 @@ def parse_excel_pp_sheet(df):
                 vals = df.iloc[current_row]
                 first_cell = str(vals.iloc[0]).strip()
                 
-                # Eğer ilk hücre boşsa veya yeni bir başlık geldiyse dur
                 if not first_cell or first_cell == "nan" or "Boy" in str(vals.values):
-                    # Polypattern çıktısında bazen boş satırlar olur, 
-                    # hemen durmak yerine bir sonraki satıra bakmak gerekebilir mi?
-                    # CSV örneğinde boş satırlar var.
-                    # Eğer beden hücresi boşsa atla, ama döngüyü kırma (hemen bitmesin)
-                    # Ama yeni parça başlangıcına kadar nasıl gideceğiz?
-                    # Çözüm: Eğer satırda 'Boy' kelimesi varsa break (yeni header).
                     if "Boy" in str(vals.values):
                         break
                     if not first_cell or first_cell == "nan":
                         current_row += 1
                         continue
                 
-                # Beden satırı mı? (XXS, S * vb.)
-                # Sayı ile başlamamalı
                 if first_cell and not first_cell[0].isdigit():
                     beden = first_cell.replace("*", "").strip()
                     p_boy = clean_number(vals.iloc[col_boy])
@@ -351,6 +304,8 @@ def main():
         st.session_state['model_parts'] = [] 
     if 'analysis_results' not in st.session_state:
         st.session_state['analysis_results'] = {}
+    if 'excel_metadata' not in st.session_state:
+        st.session_state['excel_metadata'] = {}
 
     st.title("🏭 Kalıp Ölçü Kontrol Sistemi")
     st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3022/3022329.png", width=100)
@@ -368,7 +323,7 @@ def main():
 
 def excel_control_page(user):
     st.header("📂 Excel ile Otomatik Ölçü Kontrolü")
-    st.info("Yükleyeceğiniz Excel dosyasında 'GERBER' ve 'PP' (veya Polypattern) verilerini içeren sayfalar olmalıdır. Sistem otomatik olarak parçaları eşleştirip analiz edecektir.")
+    st.info("Yükleyeceğiniz Excel dosyasında 'GERBER' ve 'PP' verilerini içeren sayfalar olmalıdır. Sistem otomatik olarak parçaları eşleştirip analiz edecektir.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -378,17 +333,14 @@ def excel_control_page(user):
 
     if uploaded_file:
         try:
-            # Tüm sayfaları oku
             xls = pd.read_excel(uploaded_file, sheet_name=None, header=None)
             sheet_names = list(xls.keys())
             
             st.write(f"Bulunan Sayfalar: {', '.join(sheet_names)}")
             
-            # Sayfaları Tahmin Et
             gerber_sheet_name = next((s for s in sheet_names if "GERBER" in s.upper()), None)
             pp_sheet_name = next((s for s in sheet_names if "PP" in s.upper() or "POLY" in s.upper()), None)
             
-            # Kullanıcıya seçtir (Tahmin edemezsek veya yanlışsa)
             c1, c2 = st.columns(2)
             with c1:
                 selected_gerber = st.selectbox("Gerber Sayfası", sheet_names, index=sheet_names.index(gerber_sheet_name) if gerber_sheet_name else 0)
@@ -400,37 +352,56 @@ def excel_control_page(user):
                     df_gerber = xls[selected_gerber]
                     df_pp = xls[selected_pp]
                     
-                    # Verileri Parse Et
+                    # 1. Model ve Sezon Bilgisini Otomatik Çek (Gerber Sayfasından)
+                    detected_model = "Bilinmiyor"
+                    detected_season = "Bilinmiyor"
+                    
+                    # Gerber sayfasında 'L.../...' formatlı ilk başlığı arıyoruz
+                    found_meta = False
+                    for idx, row in df_gerber.iterrows():
+                        row_str = row.astype(str).tolist()
+                        if "Boyut" in row_str:
+                            indices = [i for i, x in enumerate(row_str) if x == "Boyut"]
+                            if indices:
+                                # Boyut'un hemen yanındaki hücreye bak (örn: L1/UTJW-DW0DW22280-SP26-OBAS)
+                                header_cell = str(df_gerber.iloc[idx, indices[0]+1])
+                                # Regex ile Model ve Sezon'u al
+                                # Opsiyonel L\d+/ kısmı, sonra Model, sonra Sezon
+                                match = re.search(r"(?:L\d+\/)?([\w-]+)-([A-Z]{2}\d{2})-([A-Z0-9]+)", header_cell)
+                                if match:
+                                    detected_model = match.group(1)
+                                    detected_season = match.group(2)
+                                    found_meta = True
+                                    break
+                        if found_meta: break
+                    
+                    # Metadata'yı session'a kaydet
+                    st.session_state['excel_metadata'] = {
+                        'model': detected_model,
+                        'season': detected_season
+                    }
+                    
+                    # 2. Verileri Parse Et
                     gerber_parts = parse_excel_gerber_sheet(df_gerber)
                     pp_parts = parse_excel_pp_sheet(df_pp)
                     
                     if not gerber_parts:
-                        st.error("Gerber sayfasında uygun veri bloğu bulunamadı. 'Boyut' başlıklarını kontrol edin.")
+                        st.error("Gerber sayfasında uygun veri bloğu bulunamadı.")
                     if not pp_parts:
-                        st.error("Polypattern sayfasında uygun veri bloğu bulunamadı. 'Boy', 'En', 'Çevre' başlıklarını kontrol edin.")
+                        st.error("Polypattern sayfasında uygun veri bloğu bulunamadı.")
 
-                    # Eşleştirme ve Analiz
                     st.session_state['excel_analysis_results'] = []
                     
-                    # Model/Sezon bilgisini ilk Gerber parçasından alalım
-                    model_adi = "Bilinmiyor"
-                    sezon = "Bilinmiyor"
-                    
-                    # PP'deki parçaları gez, Gerber'de karşılığını bul
+                    # 3. Eşleştirme ve Analiz
                     for part_name, df_p in pp_parts.items():
                         if part_name in gerber_parts:
                             df_g = gerber_parts[part_name]
-                            
-                            # Merge
                             try:
                                 df_final = df_g.merge(df_p, on="Beden", how="inner")
-                                
-                                # Fark Hesapla
                                 df_final['Fark_Boy'] = (df_final['boy'] - df_final['poly_boy']).abs()
                                 df_final['Fark_En'] = (df_final['en'] - df_final['poly_en']).abs()
                                 df_final['Fark_Cevre'] = (df_final['cevre'] - df_final['poly_cevre']).abs()
                                 
-                                # Listeye ekle
                                 st.session_state['excel_analysis_results'].append({
                                     "parca_adi": part_name,
                                     "df": df_final,
@@ -441,13 +412,7 @@ def excel_control_page(user):
                         else:
                             st.warning(f"⚠️ {part_name} parçası Polypattern'de var ama Gerber sayfasında bulunamadı.")
 
-                    # Model Adını Gerber dosyasının içeriğinden yakalamaya çalış (İlk header'dan)
-                    # Bunun için dosyayı tekrar taramaya gerek yok, ilk parça isminden veya dosya adından çıkarım yapılabilir
-                    # Basitlik adına kullanıcı manuel girebilir veya parse edebiliriz.
-                    # Şimdilik dosya isminden veya ilk parçadan almaya çalışalım.
-                    pass 
-
-                st.success(f"İşlem Tamamlandı! {len(st.session_state['excel_analysis_results'])} parça eşleştirildi.")
+                st.success(f"Analiz Tamamlandı! {len(st.session_state['excel_analysis_results'])} parça eşleştirildi. Model: {detected_model}, Sezon: {detected_season}")
 
         except Exception as e:
             st.error(f"Dosya okunurken hata oluştu: {e}")
@@ -455,11 +420,14 @@ def excel_control_page(user):
     # --- SONUÇLARI GÖSTER VE KAYDET ---
     if st.session_state.get('excel_analysis_results'):
         results = st.session_state['excel_analysis_results']
+        meta = st.session_state.get('excel_metadata', {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'})
         
         st.divider()
         st.subheader("📊 Analiz Sonuçları")
 
-        # Toplu Kayıt İçin Hazırlık
+        # Otomatik Çekilen Bilgileri Göster
+        st.info(f"📌 **Tespit Edilen Model:** {meta['model']} | **Sezon:** {meta['season']}")
+
         parts_to_save = []
         genel_durum_list = []
 
@@ -479,7 +447,6 @@ def excel_control_page(user):
             genel_durum_list.append("Hatalı" if hata_var else "Doğru")
 
             with st.expander(f"{status_emoji} {parca_adi}", expanded=hata_var):
-                # Tablo
                 numeric_cols = ['boy', 'poly_boy', 'en', 'poly_en', 'cevre', 'poly_cevre', 'Fark_Boy', 'Fark_En', 'Fark_Cevre']
                 existing_cols = [c for c in numeric_cols if c in df_final.columns]
                 
@@ -498,7 +465,6 @@ def excel_control_page(user):
                 else:
                     st.success("Ölçüler uyumlu.")
 
-            # Kayıt nesnesini hazırla
             part_record = {
                 "parca_adi": parca_adi,
                 "durum": "Hatalı" if hata_var else "Doğru",
@@ -509,20 +475,7 @@ def excel_control_page(user):
 
         st.markdown("---")
         
-        # Model Adı ve Sezonu Manuel Sor (Excel'den tam emin olamazsak)
-        c1, c2 = st.columns(2)
-        with c1:
-            # Otomatik doldurma denemesi (İlk parça isminden L1/... yapısını kullanarak değil, dosya isminden vs.)
-            # Kullanıcıya bırakmak en güvenlisi
-            model_adi_input = st.text_input("Model Adı (Kaydetmek için giriniz)", placeholder="Örn: UTJW-DW0DW22280")
-        with c2:
-            sezon_input = st.text_input("Sezon", placeholder="Örn: SP26")
-
         if st.button("💾 Tüm Sonuçları Veritabanına Kaydet", type="primary", use_container_width=True):
-            if not model_adi_input or not sezon_input:
-                st.warning("Lütfen Model Adı ve Sezon bilgilerini giriniz.")
-                return
-            
             if not db:
                 st.warning("Veritabanı bağlantısı yok.")
                 return
@@ -534,17 +487,19 @@ def excel_control_page(user):
                 'kullanici': user,
                 'tarih': datetime.now(),
                 'business_unit': business_unit,
-                'model_adi': model_adi_input,
-                'sezon': sezon_input,
+                'model_adi': meta['model'],
+                'sezon': meta['season'],
                 'parca_sayisi': len(parts_to_save),
                 'genel_durum': genel_durum,
                 'parca_detaylari': parts_to_save
             })
             
             st.balloons()
-            st.success("Tüm parçalar başarıyla kaydedildi!")
+            st.success(f"{meta['model']} ({meta['season']}) modeli için tüm parçalar kaydedildi!")
+            
             # State temizle
             st.session_state['excel_analysis_results'] = []
+            st.session_state['excel_metadata'] = {}
             st.rerun()
 
 def new_control_page(user):
