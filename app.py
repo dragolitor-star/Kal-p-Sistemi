@@ -39,14 +39,42 @@ except:
 def parse_header_info(text):
     """
     Header metninden Model, Sezon ve Parça bilgilerini ayrıştırır.
-    Örn: L1/UTJW-DW0DW22280-SP26-OBAS -> {model: UTJW..., season: SP26, part: OBAS, unique_id: ...}
+    Robust Split Yöntemi Kullanır.
+    Örn: L1/UTJW-DW0DW22280-SP26-OBAS -> {model: UTJW..., season: SP26, part: OBAS}
+    Örn: LCS-YSESH7457-SS26-KPIS -> {model: LCS-YSESH7457, season: SS26, part: KPIS}
     """
     if not isinstance(text, str): return None
     
-    # Regex: (Opsiyonel L1/...) (Model) - (Sezon) - (Parça)
-    pattern = r"(?:L\d+\/)?([\w\-\s]+)-([A-Z]{2}\d{2})-([A-Z0-9]+)"
-    match = re.search(pattern, text)
+    clean_text = text.strip()
     
+    # 1. Opsiyonel Prefix'i temizle (L1/, M1/ vb.)
+    prefix_match = re.match(r"^[LM]\d+\/(.*)", clean_text)
+    if prefix_match:
+        clean_text = prefix_match.group(1)
+        
+    # 2. Tire ile böl
+    # Parça ve Sezon genelde sonda olur. Model adı tire içerebilir.
+    parts = clean_text.split('-')
+    
+    if len(parts) >= 3:
+        # En az 3 parça varsa: Model - Sezon - Parça
+        part_name = parts[-1].strip()
+        season = parts[-2].strip()
+        # Geriye kalan her şeyi birleştirip Model yap
+        model_name = "-".join(parts[:-2]).strip()
+        
+        unique_id = f"{model_name}-{season}-{part_name}"
+        return {
+            "model": model_name,
+            "season": season,
+            "part": part_name,
+            "unique_id": unique_id,
+            "full_text": text
+        }
+    
+    # 3. Eğer split işe yaramazsa (örn: tire yoksa), eski regex ile dene (Fallback)
+    pattern = r"(?:L\d+\/)?([\w\-\s]+)-([A-Z0-9]+)-([A-Z0-9]+)"
+    match = re.search(pattern, text)
     if match:
         model = match.group(1).strip()
         season = match.group(2).strip()
@@ -59,6 +87,7 @@ def parse_header_info(text):
             "unique_id": unique_id,
             "full_text": text
         }
+        
     return None
 
 def clean_number(val):
