@@ -6,19 +6,17 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # --------------------------------------------------------------------------
-# 1. AYARLAR VE FIREBASE BAĞLANTISI (SECRETS ENTEGRASYONU)
+# 1. AYARLAR VE FIREBASE BAĞLANTISI
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="Gerber vs Polypattern Kontrol", layout="wide")
 
 # Firebase başlatma (Secrets kullanarak)
-# Streamlit Cloud'da "Secrets" kısmından, Local'de ".streamlit/secrets.toml" dosyasından okur.
 if not firebase_admin._apps:
     try:
-        # Secrets verisini dictionary olarak al
+        # Secrets verisini al
         key_dict = dict(st.secrets["firebase"])
         
-        # Private key içindeki "\n" karakterleri string olarak gelebilir, 
-        # onları gerçek satır başı karakterine çevirmemiz gerekir.
+        # Private key içindeki "\n" karakterleri düzelt
         if "private_key" in key_dict:
             key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
 
@@ -31,10 +29,10 @@ if not firebase_admin._apps:
 try:
     db = firestore.client()
 except:
-    db = None # DB bağlantısı yoksa uygulama hata vermeden demo modunda çalışsın
+    db = None 
 
 # --------------------------------------------------------------------------
-# 2. PARSER FONKSİYONLARI (METİN İŞLEME)
+# 2. PARSER FONKSİYONLARI (GÜNCELLENDİ VE DÜZELTİLDİ)
 # --------------------------------------------------------------------------
 
 def parse_gerber_metadata(text_block):
@@ -43,7 +41,6 @@ def parse_gerber_metadata(text_block):
     Model, Sezon ve Parça ismini çeker.
     """
     # Regex: L1/ sonrasındaki kodları yakalar.
-    # UTJW-DW0DW22280 (Model), SP26 (Sezon: 2 harf 2 rakam), OBAS (Parça)
     pattern = r"L\d+\/([\w-]+)-([A-Z]{2}\d{2})-([A-Z0-9]+)"
     match = re.search(pattern, text_block)
     
@@ -56,13 +53,12 @@ def parse_gerber_metadata(text_block):
     return None
 
 def clean_number(val):
-    """Virgüllü sayıları float'a çevirir."""
+    """Metni floata çevirir, virgülü noktaya dönüştürür."""
     try:
         if isinstance(val, (int, float)):
             return float(val)
-        # Virgülü noktaya çevir ve sayı dışındaki karakterleri temizle (bazı durumlarda)
         val = str(val).replace(',', '.')
-        # Regex ile sadece sayısal değeri çek (negatifler dahil)
+        # Sadece sayısal kısmı (negatif işaret dahil) al
         found = re.findall(r"[-+]?\d*\.\d+|\d+", val)
         if found:
             return float(found[0])
@@ -72,39 +68,91 @@ def clean_number(val):
 
 def parse_gerber_table(text, value_type):
     """
-    Gerber'den kopyalanan metni tabloya çevirir.
-    value_type: 'cevre', 'en', 'boy'
+    Gerber verilerini işler.
+    value_type: 'cevre', 'en' (Y Mesafe), 'boy' (X Mesafe)
     """
     lines = text.strip().split('\n')
     data = []
     
-    # Beden regex'i: Başta XXS, XS, S, *S, M, L, XL, XXL vb. yakalar.
+    # Beden Regex: Satır başındaki XXS, XS, S, *S, M vb. yakalar
     size_pattern = r"^(\*?[A-Z0-9]+)\s+(.*)" 
 
     for line in lines:
         line = line.strip()
+        if not line: continue
+        
         match = re.match(size_pattern, line)
         if match:
             beden = match.group(1).replace("*", "") # *S'i S yap
             rest = match.group(2)
             
-            # Sayıları ayır (boşluk veya tab ile ayrılmış varsayıyoruz)
-            numbers = re.split(r'\s+', rest)
-            
+            # --- TAB İLE AYIRMA KONTROLÜ ---
+            # Excel/Gerber'den kopyalanan verilerde genellikle TAB karakteri olur.
+            # Tab varsa sütun sırası sabittir, hata payı çok düşüktür.
+            if '\t' in rest:
+                columns = rest.split('\t')
+                # Boşlukları temizle
+                columns = [c.strip() for c in columns] 
+            else:
+                # Tab yoksa mecburen boşluklara göre ayırıyoruz
+                columns = re.split(r'\s+', rest)
+
             try:
                 val = 0.0
-                if value_type == 'cevre':
-                    # Çevre tablosunda "Toplam" genellikle sondan 2. değerdir (Beden Farkı'ndan önce).
-                    val = clean_number(numbers[-2]) 
-                elif value_type == 'en':
-                    # En tablosunda Y Mesafe (Genellikle 3. veya 4. blok)
-                    # Örnek: XXS 50,84(X) 50,1(XFark) -8,64(Y) ...
-                    val = clean_number(numbers[3]) if len(numbers) > 3 else 0.0
-                elif value_type == 'boy':
-                    # Boy tablosunda X Mesafe.
-                    val = clean_number(numbers[1]) if len(numbers) > 1 else 0.0
                 
-                data.append({"Beden": beden, value_type: val})
+                # İşlem kolaylığı için sadece sayısal değerleri filtreleyip listeye alalım
+                numeric_values = []
+                for c in columns:
+                    try:
+                        # Eğer hücrede sayı varsa floata çevirip sakla
+                        if c and any(char.isdigit() for char in c):
+                            numeric_values.append(clean_number(c))
+                    except:
+                        pass
+
+                # --- 1. ÇEVRE TABLOSU MANTIĞI ---
+                if value_type == 'cevre':
+                    # Çevre ölçüsü "Toplam" sütunundadır.
+                    # Toplam sütunu, parçaların toplamı olduğu için satırdaki EN BÜYÜK sayıdır.
+                    # Bu mantık, aradaki boş hücreler veya sütun kaymalarından etkilenmez.
+                    if numeric_values:
+                        val = max(numeric_values)
+                
+                # --- 2. EN TABLOSU (Y MESAFE) MANTIĞI ---
+                elif value_type == 'en': 
+                    # Tablo yapısı genellikle: M1 | X Mes | X Fark | Y Mes | Y Fark | Toplam
+                    # M1 (Index 0)
+                    # X Mes (Index 1) - Genelde çok küçük (0.06 gibi)
+                    
+                    if '\t' in rest and len(columns) >= 4:
+                         # Eğer TAB ile ayrılmışsa, Y Mesafe kesinlikle 4. sütundur (index 3).
+                         # Çünkü boş hücreler TAB ile korunur.
+                         val = clean_number(columns[3]) 
+                    else:
+                        # Eğer BOŞLUK ile ayrılmışsa, boş hücreler kaybolur.
+                        # Heuristic: [M1, X, (XF?), Y, ...]
+                        # X Mesafe (Index 1) genelde 0'a yakındır.
+                        # Y Mesafe (En) ise M1'e yakın büyüklükte (bazen negatif) bir sayıdır.
+                        
+                        # Listede M1 ve X'ten sonra gelen (Index 2 ve sonrası)
+                        # Mutlak değeri 1'den büyük olan ilk sayıyı Y olarak kabul et.
+                        if len(numeric_values) >= 3:
+                            for v in numeric_values[2:]:
+                                if abs(v) > 1.0: 
+                                    val = v
+                                    break
+                            # Eğer döngüden bir şey çıkmazsa (çok nadir), son çare index 2'yi al
+                            if val == 0.0 and len(numeric_values) > 2:
+                                val = numeric_values[2]
+
+                # --- 3. BOY TABLOSU (X MESAFE) MANTIĞI ---
+                elif value_type == 'boy': 
+                     # X Mesafe genellikle M1'den sonraki ilk sayıdır (Index 1).
+                     if len(numeric_values) > 1:
+                         val = numeric_values[1]
+
+                # Gerber'den gelen değerler negatif olabilir, mutlak değer (abs) alarak kaydediyoruz
+                data.append({"Beden": beden, value_type: abs(val)})
             except:
                 continue
 
@@ -113,29 +161,34 @@ def parse_gerber_table(text, value_type):
 def parse_polypattern(text):
     """
     Polypattern temiz tablosunu işler.
-    Format: UTJW... Boy En Çevre
-            XXS 50,1 31,99 163,49
+    Yıldız (*) işaretlerini temizleyerek sütun kaymasını önler.
     """
     lines = text.strip().split('\n')
     data = []
     
     for line in lines:
-        parts = re.split(r'\s+', line.strip())
+        # Önce * işaretlerini BOŞLUK ile değiştir (S * -> S  )
+        # Böylece split yaparken * karakteri ayrı bir sütun gibi davranıp sayıyı 0 yapmaz.
+        clean_line = line.replace("*", " ")
+        
+        parts = re.split(r'\s+', clean_line.strip())
+        
         # En az 4 eleman olmalı: Beden, Boy, En, Çevre
         if len(parts) >= 4:
-            # İlk elemanın beden olup olmadığını kontrol et (Sayı ile başlamamalı)
+            # İlk elemanın sayı olmadığını kontrol et (Beden ismi olmalı)
             if not parts[0][0].isdigit():
                 try:
-                    beden = parts[0].replace("*", "")
-                    boy = clean_number(parts[1])
-                    en = clean_number(parts[2])
-                    cevre = clean_number(parts[3])
+                    beden = parts[0]
+                    # Polypattern çıktısında sıra: Boy, En, Çevre
+                    poly_boy = clean_number(parts[1])
+                    poly_en = clean_number(parts[2])
+                    poly_cevre = clean_number(parts[3])
                     
                     data.append({
                         "Beden": beden,
-                        "poly_boy": boy,
-                        "poly_en": en,
-                        "poly_cevre": cevre
+                        "poly_boy": poly_boy,
+                        "poly_en": poly_en,
+                        "poly_cevre": poly_cevre
                     })
                 except:
                     continue
@@ -155,7 +208,6 @@ def main():
     st.title("🏭 Kalıp Ölçü Kontrol Sistemi")
     st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3022/3022329.png", width=100)
     
-    # Giriş Simülasyonu
     user = st.sidebar.text_input("Kullanıcı Adı", "muhendis_user")
     
     menu = st.sidebar.radio("Menü", ["Yeni Ölçü Kontrolü", "Kontrol Listesi / Geçmiş"])
@@ -168,7 +220,7 @@ def main():
 def new_control_page(user):
     st.header("Yeni Model Ölçü Kontrolü")
 
-    # Adım 1: Model Başlatma ve Bilgiler
+    # Adım 1: Model Bilgileri
     with st.expander("ℹ️ İşlem Bilgisi", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -182,10 +234,6 @@ def new_control_page(user):
     st.divider()
 
     col_gerber, col_poly = st.columns([1, 1])
-
-    # --- INPUT ALANLARI ---
-    # Not: text_area key'leri her parça kaydında temizlenmeli, bunun için form kullanmıyoruz
-    # ancak kayıttan sonra st.rerun ile state temizleyebiliriz.
     
     with col_gerber:
         st.subheader("1. Gerber Verileri")
@@ -205,7 +253,7 @@ def new_control_page(user):
             st.warning("Lütfen tüm alanları doldurunuz.")
             return
 
-        # 1. Metadata Çıkarma (Sadece ilk tablodan)
+        # 1. Metadata
         metadata = parse_gerber_metadata(g_cevre_txt)
         if metadata:
             current_model_info = {
@@ -214,52 +262,50 @@ def new_control_page(user):
                 "parca_adi": metadata['parca_adi'],
                 "bu": business_unit
             }
-            # Session başlatma veya güncelleme
             if 'active_session' not in st.session_state:
                 st.session_state['active_session'] = True
                 st.session_state['current_model'] = current_model_info
             else:
-                # Model adı değişmemeli ama parça adı güncellenmeli
                 st.session_state['current_model']['parca_adi'] = metadata['parca_adi']
         else:
-            st.error("Gerber verisinden Model/Sezon bilgisi okunamadı. Formatı kontrol edin.")
+            st.error("Gerber verisinden Model/Sezon bilgisi okunamadı.")
             return
 
-        # 2. Tabloları İşleme
+        # 2. Parsing
         df_g_cevre = parse_gerber_table(g_cevre_txt, 'cevre')
         df_g_en = parse_gerber_table(g_en_txt, 'en')
         df_g_boy = parse_gerber_table(g_boy_txt, 'boy')
         df_poly = parse_polypattern(poly_txt)
 
         if df_g_cevre.empty or df_g_en.empty or df_g_boy.empty or df_poly.empty:
-            st.error("Veriler tabloya dönüştürülemedi. Lütfen kopyalama formatını kontrol edin.")
+            st.error("Veriler tabloya dönüştürülemedi.")
             return
 
-        # 3. Birleştirme ve Hesaplama
         try:
+            # 3. Birleştirme (Merge)
             df_gerber_total = df_g_cevre.merge(df_g_en, on="Beden").merge(df_g_boy, on="Beden")
             df_final = df_gerber_total.merge(df_poly, on="Beden", how="inner")
             
-            df_final['Fark_Boy'] = df_final['boy'] - df_final['poly_boy']
-            df_final['Fark_En'] = df_final['en'] - df_final['poly_en']
-            df_final['Fark_Cevre'] = df_final['cevre'] - df_final['poly_cevre']
+            # Fark Hesaplama (Mutlak Değer)
+            df_final['Fark_Boy'] = (df_final['boy'] - df_final['poly_boy']).abs()
+            df_final['Fark_En'] = (df_final['en'] - df_final['poly_en']).abs()
+            df_final['Fark_Cevre'] = (df_final['cevre'] - df_final['poly_cevre']).abs()
 
-            # Sonuçları geçici state'e at (Kayıt butonu için)
             st.session_state['last_analysis'] = df_final
             
         except Exception as e:
-            st.error(f"Tablo birleştirme hatası: {e}")
+            st.error(f"Tablo birleştirme hatası: {e}. Lütfen Beden isimlerinin her iki programda da aynı (XXS, M vb.) olduğundan emin olun.")
             return
 
-    # --- SONUÇLARI GÖSTERME VE KAYDETME ---
+    # --- SONUÇ EKRANI ---
     if 'last_analysis' in st.session_state and st.session_state['last_analysis'] is not None:
         df_final = st.session_state['last_analysis']
         tolerans = 0.05
         
         hatali_satirlar = df_final[
-            (df_final['Fark_Boy'].abs() > tolerans) | 
-            (df_final['Fark_En'].abs() > tolerans) | 
-            (df_final['Fark_Cevre'].abs() > tolerans)
+            (df_final['Fark_Boy'] > tolerans) | 
+            (df_final['Fark_En'] > tolerans) | 
+            (df_final['Fark_Cevre'] > tolerans)
         ]
         
         hata_var = not hatali_satirlar.empty
@@ -267,16 +313,13 @@ def new_control_page(user):
         st.divider()
         st.subheader(f"Sonuçlar: {st.session_state['current_model'].get('parca_adi', 'Bilinmeyen Parça')}")
         
-        # --- TABLO GÖSTERİMİ DÜZELTİLDİ ---
-        # Sayısal olmayan "Beden" sütununun format hatası vermemesi için
-        # sadece sayısal sütunları seçiyoruz.
-        
+        # Tablo Gösterimi (Sayısal format hatası almamak için subset kullanıyoruz)
         numeric_cols = ['boy', 'poly_boy', 'en', 'poly_en', 'cevre', 'poly_cevre', 'Fark_Boy', 'Fark_En', 'Fark_Cevre']
         existing_numeric_cols = [col for col in numeric_cols if col in df_final.columns]
 
         st.dataframe(
             df_final.style
-            .format("{:.2f}", subset=existing_numeric_cols) # Sadece sayılara format uygula
+            .format("{:.2f}", subset=existing_numeric_cols)
             .map(
                 lambda x: 'background-color: #ffcccc' if isinstance(x, (int, float)) and abs(x) > tolerans else '',
                 subset=['Fark_Boy', 'Fark_En', 'Fark_Cevre']
@@ -288,7 +331,7 @@ def new_control_page(user):
         else:
             st.success("✅ Tüm ölçüler tolerans dahilinde uyumlu.")
 
-        # Parça Kaydetme Butonu
+        # Kayıt Butonu
         col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
             if st.button("💾 Parçayı Listeye Ekle"):
@@ -300,12 +343,12 @@ def new_control_page(user):
                 }
                 st.session_state['model_parts'].append(part_record)
                 
-                # Ekranı temizle (Analiz verisini sil)
+                # Ekranı temizle
                 del st.session_state['last_analysis']
-                st.success("Parça eklendi! Yeni parça için yukarıdaki alanları temizleyip yapıştırabilirsiniz.")
+                st.success("Parça eklendi!")
                 st.rerun()
 
-    # --- MODELİ BİTİRME BUTONU ---
+    # --- MODEL TAMAMLAMA ---
     if st.session_state.get('active_session') and len(st.session_state['model_parts']) > 0:
         st.markdown("---")
         st.subheader("Model İşlemleri")
@@ -314,8 +357,7 @@ def new_control_page(user):
 
 def save_to_firestore(user, bu):
     if not db:
-        st.warning("Veritabanı bağlantısı yok (Secrets yapılandırılmamış olabilir).")
-        # State temizle
+        st.warning("Veritabanı bağlantısı yok. İşlem yerel olarak simüle edildi.")
         st.session_state['model_parts'] = []
         st.session_state['current_model'] = {}
         del st.session_state['active_session']
@@ -325,7 +367,6 @@ def save_to_firestore(user, bu):
     model_data = st.session_state['current_model']
     parts = st.session_state['model_parts']
     
-    # Genel durum tespiti
     genel_durum = "Doğru Çevrilmiş"
     for p in parts:
         if p['durum'] == "Hatalı":
@@ -347,7 +388,7 @@ def save_to_firestore(user, bu):
     st.balloons()
     st.success("Model başarıyla kaydedildi!")
     
-    # State temizle
+    # Sıfırla
     st.session_state['model_parts'] = []
     st.session_state['current_model'] = {}
     del st.session_state['active_session']
@@ -364,39 +405,29 @@ def history_page():
     col1, col2 = st.columns(2)
     search_term = col1.text_input("Model veya Kullanıcı Ara")
     
-    # Veriyi çek
     try:
         docs = db.collection('qc_records').order_by('tarih', direction=firestore.Query.DESCENDING).limit(50).stream()
-        
         data = []
         for doc in docs:
-            d = doc.to_dict()
-            data.append(d)
+            data.append(doc.to_dict())
             
         df = pd.DataFrame(data)
         
         if not df.empty:
-            # Timestamp düzeltme
             if 'tarih' in df.columns:
                 df['tarih'] = pd.to_datetime(df['tarih']).dt.strftime('%Y-%m-%d %H:%M')
             
-            # Arama filtresi
             if search_term:
                 df = df[df['model_adi'].str.contains(search_term, case=False, na=False) | 
                         df['kullanici'].str.contains(search_term, case=False, na=False)]
 
-            st.dataframe(
-                df[['tarih', 'kullanici', 'business_unit', 'model_adi', 'sezon', 'genel_durum', 'parca_sayisi']],
-                use_container_width=True
-            )
+            st.dataframe(df[['tarih', 'kullanici', 'business_unit', 'model_adi', 'sezon', 'genel_durum', 'parca_sayisi']], use_container_width=True)
             
-            # Detay Gösterme Opsiyonu
             selected_row = st.selectbox("Detaylarını görmek istediğiniz modeli seçin:", df['model_adi'].unique())
             if selected_row:
                 detay = df[df['model_adi'] == selected_row].iloc[0]
                 st.write(f"**Parça Detayları ({selected_row}):**")
                 st.json(detay['parca_detaylari'])
-                
         else:
             st.info("Henüz kayıt bulunmamaktadır.")
             
