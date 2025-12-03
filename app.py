@@ -96,6 +96,17 @@ def delete_user(username):
     except:
         return False
 
+def update_password(username, new_password):
+    """Kullanıcı şifresini günceller."""
+    if not db: return False
+    try:
+        db.collection('users').document(username).update({
+            'password': make_hashes(new_password)
+        })
+        return True
+    except:
+        return False
+
 # --------------------------------------------------------------------------
 # 3. YARDIMCI PARSER FONKSİYONLARI
 # --------------------------------------------------------------------------
@@ -361,6 +372,31 @@ def main():
         st.session_state['username'] = ""
         st.session_state['role'] = ""
         st.rerun()
+
+    # --- ŞİFRE DEĞİŞTİRME ---
+    with st.sidebar.expander("🔑 Şifre Değiştir"):
+        with st.form("change_password_form"):
+            current_pass = st.text_input("Mevcut Şifre", type="password")
+            new_pass = st.text_input("Yeni Şifre", type="password")
+            confirm_pass = st.text_input("Yeni Şifre (Tekrar)", type="password")
+            submit_pass = st.form_submit_button("Şifreyi Güncelle")
+            
+            if submit_pass:
+                # 1. Mevcut şifreyi doğrula
+                is_valid, _ = login_user(st.session_state['username'], current_pass)
+                if not is_valid:
+                    st.error("Mevcut şifre hatalı!")
+                # 2. Yeni şifreleri kontrol et
+                elif new_pass != confirm_pass:
+                    st.error("Yeni şifreler eşleşmiyor!")
+                elif not new_pass:
+                    st.error("Yeni şifre boş olamaz!")
+                # 3. Güncelle
+                else:
+                    if update_password(st.session_state['username'], new_pass):
+                        st.success("Şifreniz başarıyla güncellendi!")
+                    else:
+                        st.error("Şifre güncellenirken hata oluştu.")
 
     # Menü Seçenekleri
     menu_options = ["Yeni Ölçü Kontrolü (Manuel)", "Excel ile Otomatik Kontrol", "Kontrol Listesi / Geçmiş"]
