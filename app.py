@@ -192,15 +192,13 @@ def parse_polypattern(text):
 def parse_excel_gerber_sheet(df):
     """
     Gerber sayfasını tarar. 
-    KESİN POZİSYONEL MANTIK:
+    Mantık: 
     1. Blok: Çevre
-    2. Blok: En
-    3. Blok: Boy
+    2. ve 3. Bloklar: En veya Boy (Başlıklara göre tespit edilir)
     """
     parts_data = {}
     
     for idx, row in df.iterrows():
-        # Hücre değerlerini temizle
         row_str = [str(x).strip() for x in row.tolist()]
         
         if "Boyut" in row_str:
@@ -213,47 +211,62 @@ def parse_excel_gerber_sheet(df):
                 if not meta:
                     continue
                 
-                # --- KESİN BLOK SINIRLARI ---
-                # Kullanıcı Talimatı:
-                # 1. Tablo -> Çevre
-                # 2. Tablo -> En
-                # 3. Tablo -> Boy
+                # --- BLOK SINIRLARI ---
+                block1 = (indices[0]+1, indices[1])
+                block2 = (indices[1]+1, indices[2])
+                block3 = (indices[2]+1, min(indices[2] + 20, len(df.columns)))
                 
-                block_cevre_range = (indices[0]+1, indices[1])
-                block_en_range = (indices[1]+1, indices[2])
-                block_boy_range = (indices[2]+1, min(indices[2] + 20, len(df.columns)))
+                # --- OTOMATİK TESPİT (EN vs BOY) ---
+                # Varsayılan: Block 2=En, Block 3=Boy
+                range_en = block2
+                range_boy = block3
+                
+                # Block 2'de "X Mesafe" var mı? Varsa bu BOY tablosudur -> Swap gerekir
+                # Block 2'de "Y Mesafe" var mı? Varsa bu EN tablosudur -> OK
+                
+                is_block2_boy = False
+                for c in range(block2[0], block2[1]):
+                    h = normalize_header(df.iloc[idx, c])
+                    if "XMESA" in h:
+                        is_block2_boy = True
+                        break
+                
+                if is_block2_boy:
+                    # Tablolar yer değiştirmiş (BK/BY durumu)
+                    range_boy = block2
+                    range_en = block3
                 
                 # --- SÜTUN İNDEKSLERİNİ BUL ---
                 
-                # 1. ÇEVRE (Blok 1): Genelde "Toplam"
+                # 1. ÇEVRE (Block 1): "Toplam"
                 col_cevre = -1
-                for c in range(block_cevre_range[0], block_cevre_range[1]):
+                for c in range(block1[0], block1[1]):
                     if "TOPLAM" in normalize_header(df.iloc[idx, c]):
                         col_cevre = c
                         break
                 
-                # 2. EN (Blok 2): "Y Mesafe" veya "Toplam"
+                # 2. EN (Y)
                 col_en = -1
-                for c in range(block_en_range[0], block_en_range[1]):
+                for c in range(range_en[0], range_en[1]):
                     h = normalize_header(df.iloc[idx, c])
                     if "YMESA" in h:
                         col_en = c
                         break
                 if col_en == -1: # Yedek: Toplam
-                    for c in range(block_en_range[0], block_en_range[1]):
+                    for c in range(range_en[0], range_en[1]):
                         if "TOPLAM" in normalize_header(df.iloc[idx, c]):
                             col_en = c
                             break
 
-                # 3. BOY (Blok 3): "X Mesafe" veya "Toplam"
+                # 3. BOY (X)
                 col_boy = -1
-                for c in range(block_boy_range[0], block_boy_range[1]):
+                for c in range(range_boy[0], range_boy[1]):
                     h = normalize_header(df.iloc[idx, c])
                     if "XMESA" in h:
                         col_boy = c
                         break
                 if col_boy == -1: # Yedek: Toplam
-                    for c in range(block_boy_range[0], block_boy_range[1]):
+                    for c in range(range_boy[0], range_boy[1]):
                         if "TOPLAM" in normalize_header(df.iloc[idx, c]):
                             col_boy = c
                             break
@@ -271,28 +284,21 @@ def parse_excel_gerber_sheet(df):
                     beden = beden_raw.replace("*", "").strip()
                     
                     # --- DEĞERLERİ AL (Smart Fallback ile) ---
-                    # Gerber ölçüsü mutlak değer olarak alınır (negatif de olsa pozitif yapılır)
                     
                     # 1. ÇEVRE
                     val_cevre = 0.0
-                    if col_cevre != -1:
-                        val_cevre = clean_number_excel(vals[col_cevre])
-                    if val_cevre == 0.0:
-                        val_cevre = get_max_abs_value_in_range(vals, block_cevre_range[0], block_cevre_range[1])
+                    if col_cevre != -1: val_cevre = clean_number_excel(vals[col_cevre])
+                    if val_cevre == 0.0: val_cevre = get_max_abs_value_in_range(vals, block1[0], block1[1])
 
-                    # 2. EN (Kesin 2. Blok)
+                    # 2. EN
                     val_en = 0.0
-                    if col_en != -1:
-                        val_en = clean_number_excel(vals[col_en])
-                    if val_en == 0.0:
-                        val_en = get_max_abs_value_in_range(vals, block_en_range[0], block_en_range[1])
+                    if col_en != -1: val_en = clean_number_excel(vals[col_en])
+                    if val_en == 0.0: val_en = get_max_abs_value_in_range(vals, range_en[0], range_en[1])
                         
-                    # 3. BOY (Kesin 3. Blok)
+                    # 3. BOY
                     val_boy = 0.0
-                    if col_boy != -1:
-                        val_boy = clean_number_excel(vals[col_boy])
-                    if val_boy == 0.0:
-                        val_boy = get_max_abs_value_in_range(vals, block_boy_range[0], block_boy_range[1])
+                    if col_boy != -1: val_boy = clean_number_excel(vals[col_boy])
+                    if val_boy == 0.0: val_boy = get_max_abs_value_in_range(vals, range_boy[0], range_boy[1])
 
                     part_measurements.append({
                         "Beden": beden,
