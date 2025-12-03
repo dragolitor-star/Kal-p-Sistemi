@@ -271,6 +271,7 @@ def parse_excel_gerber_sheet(df):
                     beden = beden_raw.replace("*", "").strip()
                     
                     # --- DEĞERLERİ AL (Smart Fallback ile) ---
+                    # Gerber ölçüsü mutlak değer olarak alınır (negatif de olsa pozitif yapılır)
                     
                     # 1. ÇEVRE
                     val_cevre = 0.0
@@ -443,9 +444,10 @@ def excel_control_page(user):
                             
                             try:
                                 df_final = df_g.merge(df_p, on="Beden", how="inner")
-                                df_final['Fark_Boy'] = (df_final['boy'] - df_final['poly_boy']).abs()
-                                df_final['Fark_En'] = (df_final['en'] - df_final['poly_en']).abs()
-                                df_final['Fark_Cevre'] = (df_final['cevre'] - df_final['poly_cevre']).abs()
+                                # FARK HESAPLAMA (GÜNCELLENDİ: Mutlak değer kaldırıldı, işaretli fark gösterilecek)
+                                df_final['Fark_Boy'] = df_final['boy'] - df_final['poly_boy']
+                                df_final['Fark_En'] = df_final['en'] - df_final['poly_en']
+                                df_final['Fark_Cevre'] = df_final['cevre'] - df_final['poly_cevre']
                                 
                                 model_key = f"{meta['model']} ({meta['season']})"
                                 if model_key not in grouped_results:
@@ -490,10 +492,11 @@ def excel_control_page(user):
                     parca_adi = part['parca_adi']
                     
                     tolerans = 0.05
+                    # HATA KONTROLÜ (GÜNCELLENDİ: Mutlak değer üzerinden kontrol)
                     hatali_satirlar = df[
-                        (df['Fark_Boy'] > tolerans) | 
-                        (df['Fark_En'] > tolerans) | 
-                        (df['Fark_Cevre'] > tolerans)
+                        (df['Fark_Boy'].abs() > tolerans) | 
+                        (df['Fark_En'].abs() > tolerans) | 
+                        (df['Fark_Cevre'].abs() > tolerans)
                     ]
                     hata_var = not hatali_satirlar.empty
                     if hata_var: has_fault_in_model = True
@@ -617,9 +620,10 @@ def new_control_page(user):
                 try:
                     df_t = df_gc.merge(df_ge, on="Beden").merge(df_gb, on="Beden")
                     df_f = df_t.merge(df_p, on="Beden")
-                    df_f['Fark_Boy'] = (df_f['boy'] - df_f['poly_boy']).abs()
-                    df_f['Fark_En'] = (df_f['en'] - df_f['poly_en']).abs()
-                    df_f['Fark_Cevre'] = (df_f['cevre'] - df_f['poly_cevre']).abs()
+                    # GÜNCELLENDİ: Manuel girişte de fark hesabı işaretli
+                    df_f['Fark_Boy'] = df_f['boy'] - df_f['poly_boy']
+                    df_f['Fark_En'] = df_f['en'] - df_f['poly_en']
+                    df_f['Fark_Cevre'] = df_f['cevre'] - df_f['poly_cevre']
                     
                     st.session_state['analysis_results'][i] = {"df": df_f, "parca_adi": p_name, "saved": False}
                 except: st.error(f"Parça {i+1} hatası.")
