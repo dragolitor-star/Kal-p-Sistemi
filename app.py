@@ -43,17 +43,15 @@ def parse_header_info(text):
     """
     if not isinstance(text, str): return None
     
-    # Regex: (L1/ opsiyonel) (Model) - (Sezon) - (Parça)
-    # Model: Harf/Rakam/Tire karışık olabilir
-    # Sezon: Genelde 2 Harf 2 Rakam (SP26)
-    # Parça: Harf/Rakam (OBAS, A, B)
-    pattern = r"(?:L\d+\/)?([\w-]+)-([A-Z]{2}\d{2})-([A-Z0-9]+)"
+    # Regex Güncellemesi: Daha esnek hale getirildi
+    # (Opsiyonel L1/...) (Model: Boşluk içerebilir) - (Sezon) - (Parça)
+    pattern = r"(?:L\d+\/)?([\w\-\s]+)-([A-Z]{2}\d{2})-([A-Z0-9]+)"
     match = re.search(pattern, text)
     
     if match:
-        model = match.group(1)
-        season = match.group(2)
-        part = match.group(3)
+        model = match.group(1).strip()
+        season = match.group(2).strip()
+        part = match.group(3).strip()
         # Benzersiz kimlik: Model-Sezon-Parça
         unique_id = f"{model}-{season}-{part}"
         return {
@@ -197,7 +195,10 @@ def parse_excel_gerber_sheet(df):
     parts_data = {}
     
     for idx, row in df.iterrows():
-        row_str = row.astype(str).tolist()
+        # DÜZELTME: Hücre değerlerini string'e çevirip boşlukları temizliyoruz.
+        # Böylece "Boyut " gibi hatalı yazımlar da "Boyut" olarak algılanır.
+        row_str = [str(x).strip() for x in row.tolist()]
+        
         if "Boyut" in row_str:
             indices = [i for i, x in enumerate(row_str) if x == "Boyut"]
             
@@ -236,9 +237,11 @@ def parse_excel_gerber_sheet(df):
                 
                 while current_row < len(df):
                     vals = df.iloc[current_row]
-                    beden_raw = str(vals[indices[0]])
+                    # Beden hücresini de temizleyerek alıyoruz
+                    beden_raw = str(vals[indices[0]]).strip()
                     
-                    if pd.isna(vals[indices[0]]) or beden_raw == "Boyut" or beden_raw == "nan":
+                    # Döngü bitirme koşulları
+                    if not beden_raw or beden_raw == "Boyut" or beden_raw == "nan" or pd.isna(vals[indices[0]]):
                         break
                         
                     beden = beden_raw.replace("*", "").strip()
