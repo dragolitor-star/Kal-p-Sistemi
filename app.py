@@ -87,24 +87,17 @@ def parse_gerber_table(text, value_type):
             rest = match.group(2)
             
             # --- TAB İLE AYIRMA KONTROLÜ ---
-            # Excel/Gerber'den kopyalanan verilerde genellikle TAB karakteri olur.
-            # Tab varsa sütun sırası sabittir, hata payı çok düşüktür.
             if '\t' in rest:
                 columns = rest.split('\t')
-                # Boşlukları temizle
                 columns = [c.strip() for c in columns] 
             else:
-                # Tab yoksa mecburen boşluklara göre ayırıyoruz
                 columns = re.split(r'\s+', rest)
 
             try:
                 val = 0.0
-                
-                # İşlem kolaylığı için sadece sayısal değerleri filtreleyip listeye alalım
                 numeric_values = []
                 for c in columns:
                     try:
-                        # Eğer hücrede sayı varsa floata çevirip sakla
                         if c and any(char.isdigit() for char in c):
                             numeric_values.append(clean_number(c))
                     except:
@@ -112,46 +105,27 @@ def parse_gerber_table(text, value_type):
 
                 # --- 1. ÇEVRE TABLOSU MANTIĞI ---
                 if value_type == 'cevre':
-                    # Çevre ölçüsü "Toplam" sütunundadır.
-                    # Toplam sütunu, parçaların toplamı olduğu için satırdaki EN BÜYÜK sayıdır.
-                    # Bu mantık, aradaki boş hücreler veya sütun kaymalarından etkilenmez.
                     if numeric_values:
                         val = max(numeric_values)
                 
                 # --- 2. EN TABLOSU (Y MESAFE) MANTIĞI ---
                 elif value_type == 'en': 
-                    # Tablo yapısı genellikle: M1 | X Mes | X Fark | Y Mes | Y Fark | Toplam
-                    # M1 (Index 0)
-                    # X Mes (Index 1) - Genelde çok küçük (0.06 gibi)
-                    
                     if '\t' in rest and len(columns) >= 4:
-                         # Eğer TAB ile ayrılmışsa, Y Mesafe kesinlikle 4. sütundur (index 3).
-                         # Çünkü boş hücreler TAB ile korunur.
                          val = clean_number(columns[3]) 
                     else:
-                        # Eğer BOŞLUK ile ayrılmışsa, boş hücreler kaybolur.
-                        # Heuristic: [M1, X, (XF?), Y, ...]
-                        # X Mesafe (Index 1) genelde 0'a yakındır.
-                        # Y Mesafe (En) ise M1'e yakın büyüklükte (bazen negatif) bir sayıdır.
-                        
-                        # Listede M1 ve X'ten sonra gelen (Index 2 ve sonrası)
-                        # Mutlak değeri 1'den büyük olan ilk sayıyı Y olarak kabul et.
                         if len(numeric_values) >= 3:
                             for v in numeric_values[2:]:
                                 if abs(v) > 1.0: 
                                     val = v
                                     break
-                            # Eğer döngüden bir şey çıkmazsa (çok nadir), son çare index 2'yi al
                             if val == 0.0 and len(numeric_values) > 2:
                                 val = numeric_values[2]
 
                 # --- 3. BOY TABLOSU (X MESAFE) MANTIĞI ---
                 elif value_type == 'boy': 
-                     # X Mesafe genellikle M1'den sonraki ilk sayıdır (Index 1).
                      if len(numeric_values) > 1:
                          val = numeric_values[1]
 
-                # Gerber'den gelen değerler negatif olabilir, mutlak değer (abs) alarak kaydediyoruz
                 data.append({"Beden": beden, value_type: abs(val)})
             except:
                 continue
@@ -161,25 +135,18 @@ def parse_gerber_table(text, value_type):
 def parse_polypattern(text):
     """
     Polypattern temiz tablosunu işler.
-    Yıldız (*) işaretlerini temizleyerek sütun kaymasını önler.
     """
     lines = text.strip().split('\n')
     data = []
     
     for line in lines:
-        # Önce * işaretlerini BOŞLUK ile değiştir (S * -> S  )
-        # Böylece split yaparken * karakteri ayrı bir sütun gibi davranıp sayıyı 0 yapmaz.
         clean_line = line.replace("*", " ")
-        
         parts = re.split(r'\s+', clean_line.strip())
         
-        # En az 4 eleman olmalı: Beden, Boy, En, Çevre
         if len(parts) >= 4:
-            # İlk elemanın sayı olmadığını kontrol et (Beden ismi olmalı)
             if not parts[0][0].isdigit():
                 try:
                     beden = parts[0]
-                    # Polypattern çıktısında sıra: Boy, En, Çevre
                     poly_boy = clean_number(parts[1])
                     poly_en = clean_number(parts[2])
                     poly_cevre = clean_number(parts[3])
@@ -217,6 +184,16 @@ def main():
     elif menu == "Kontrol Listesi / Geçmiş":
         history_page()
 
+def clear_inputs():
+    """Input alanlarını temizleyen yardımcı fonksiyon"""
+    st.session_state["g_cevre"] = ""
+    st.session_state["g_en"] = ""
+    st.session_state["g_boy"] = ""
+    st.session_state["poly_input"] = ""
+    # Eğer analiz sonucu ekranda duruyorsa onu da temizle
+    if 'last_analysis' in st.session_state:
+        del st.session_state['last_analysis']
+
 def new_control_page(user):
     st.header("Yeni Model Ölçü Kontrolü")
 
@@ -229,23 +206,31 @@ def new_control_page(user):
         # Eğer aktif bir oturum varsa bilgileri göster
         if st.session_state.get('active_session'):
             st.info(f"Aktif Model: **{st.session_state['current_model'].get('model_adi')}** | Sezon: **{st.session_state['current_model'].get('sezon')}**")
-            st.write(f"Şu ana kadar eklenen parça sayısı: {len(st.session_state['model_parts'])}")
+            st.metric("Eklenen Parça Sayısı", len(st.session_state['model_parts']))
+            
+            # Eklenen parçaların listesini kısaca göster (Accordion içinde)
+            if len(st.session_state['model_parts']) > 0:
+                with st.expander("Eklenen Parçaları Gör"):
+                    for p in st.session_state['model_parts']:
+                        durum_ikon = "✅" if p['durum'] == "Doğru" else "❌"
+                        st.write(f"{durum_ikon} {p['parca_adi']}")
 
     st.divider()
 
     col_gerber, col_poly = st.columns([1, 1])
     
+    # Input alanlarına KEY atadık, böylece dışarıdan müdahale edip temizleyebiliriz.
     with col_gerber:
         st.subheader("1. Gerber Verileri")
         st.caption("Sırasıyla Çevre, En ve Boy tablolarını yapıştırın.")
-        g_cevre_txt = st.text_area("Gerber Çevre Tablosu", height=100)
-        g_en_txt = st.text_area("Gerber En Tablosu (Y Mesafe)", height=100)
-        g_boy_txt = st.text_area("Gerber Boy Tablosu (X Mesafe)", height=100)
+        g_cevre_txt = st.text_area("Gerber Çevre Tablosu", height=100, key="g_cevre")
+        g_en_txt = st.text_area("Gerber En Tablosu (Y Mesafe)", height=100, key="g_en")
+        g_boy_txt = st.text_area("Gerber Boy Tablosu (X Mesafe)", height=100, key="g_boy")
 
     with col_poly:
         st.subheader("2. Polypattern Verisi")
         st.caption("Polypattern programından alınan toplu tabloyu yapıştırın.")
-        poly_txt = st.text_area("Polypattern Çıktısı", height=340)
+        poly_txt = st.text_area("Polypattern Çıktısı", height=340, key="poly_input")
 
     # --- ANALİZ BUTONU ---
     if st.button("Ölçüleri Karşılaştır", type="primary"):
@@ -266,6 +251,7 @@ def new_control_page(user):
                 st.session_state['active_session'] = True
                 st.session_state['current_model'] = current_model_info
             else:
+                # Sadece parça adını güncelle (Model ve Sezon sabit kalmalı)
                 st.session_state['current_model']['parca_adi'] = metadata['parca_adi']
         else:
             st.error("Gerber verisinden Model/Sezon bilgisi okunamadı.")
@@ -294,7 +280,7 @@ def new_control_page(user):
             st.session_state['last_analysis'] = df_final
             
         except Exception as e:
-            st.error(f"Tablo birleştirme hatası: {e}. Lütfen Beden isimlerinin her iki programda da aynı (XXS, M vb.) olduğundan emin olun.")
+            st.error(f"Tablo birleştirme hatası: {e}. Lütfen Beden isimlerinin her iki programda da aynı olduğundan emin olun.")
             return
 
     # --- SONUÇ EKRANI ---
@@ -313,7 +299,6 @@ def new_control_page(user):
         st.divider()
         st.subheader(f"Sonuçlar: {st.session_state['current_model'].get('parca_adi', 'Bilinmeyen Parça')}")
         
-        # Tablo Gösterimi (Sayısal format hatası almamak için subset kullanıyoruz)
         numeric_cols = ['boy', 'poly_boy', 'en', 'poly_en', 'cevre', 'poly_cevre', 'Fark_Boy', 'Fark_En', 'Fark_Cevre']
         existing_numeric_cols = [col for col in numeric_cols if col in df_final.columns]
 
@@ -331,10 +316,11 @@ def new_control_page(user):
         else:
             st.success("✅ Tüm ölçüler tolerans dahilinde uyumlu.")
 
-        # Kayıt Butonu
+        # --- PARÇAYI KAYDETME VE YENİ PARÇAYA GEÇME ---
         col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
-            if st.button("💾 Parçayı Listeye Ekle"):
+            # Callback kullanımı: Butona basılınca clear_inputs fonksiyonu çalışacak
+            if st.button("💾 Parçayı Listeye Ekle ve Temizle"):
                 part_record = {
                     "parca_adi": st.session_state['current_model']['parca_adi'],
                     "durum": "Hatalı" if hata_var else "Doğru",
@@ -343,17 +329,24 @@ def new_control_page(user):
                 }
                 st.session_state['model_parts'].append(part_record)
                 
-                # Ekranı temizle
-                del st.session_state['last_analysis']
-                st.success("Parça eklendi!")
+                # Inputları temizle
+                clear_inputs()
+                
+                st.success("Parça listeye eklendi! Alanlar temizlendi, sıradaki parçayı girebilirsiniz.")
                 st.rerun()
 
-    # --- MODEL TAMAMLAMA ---
+    # --- MODELİ VERİTABANINA YAZMA (Sayfanın en altında veya Sidebar'da olabilir) ---
     if st.session_state.get('active_session') and len(st.session_state['model_parts']) > 0:
         st.markdown("---")
-        st.subheader("Model İşlemleri")
-        if st.button("🏁 Tüm Model Kontrolünü Tamamla ve Veritabanına Yaz", type="primary"):
-            save_to_firestore(user, business_unit)
+        st.info("Bu model için tüm parçaları eklediyseniz, aşağıdaki butona basarak veritabanına kaydedin.")
+        
+        col_final1, col_final2 = st.columns([2, 1])
+        with col_final1:
+            st.write(f"**Toplam Parça Sayısı:** {len(st.session_state['model_parts'])}")
+        
+        with col_final2:
+            if st.button("🏁 Model Kontrolünü Tamamla ve Veritabanına Yaz", type="primary", use_container_width=True):
+                save_to_firestore(user, business_unit)
 
 def save_to_firestore(user, bu):
     if not db:
@@ -361,7 +354,7 @@ def save_to_firestore(user, bu):
         st.session_state['model_parts'] = []
         st.session_state['current_model'] = {}
         del st.session_state['active_session']
-        if 'last_analysis' in st.session_state: del st.session_state['last_analysis']
+        clear_inputs() # Temizle
         return
 
     model_data = st.session_state['current_model']
@@ -386,13 +379,13 @@ def save_to_firestore(user, bu):
     })
     
     st.balloons()
-    st.success("Model başarıyla kaydedildi!")
+    st.success("Model başarıyla veritabanına kaydedildi!")
     
     # Sıfırla
     st.session_state['model_parts'] = []
     st.session_state['current_model'] = {}
     del st.session_state['active_session']
-    if 'last_analysis' in st.session_state: del st.session_state['last_analysis']
+    clear_inputs() # Yeni model için temizle
     st.rerun()
 
 def history_page():
