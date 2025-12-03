@@ -196,7 +196,6 @@ def parse_excel_gerber_sheet(df):
     
     for idx, row in df.iterrows():
         # DÜZELTME: Hücre değerlerini string'e çevirip boşlukları temizliyoruz.
-        # Böylece "Boyut " gibi hatalı yazımlar da "Boyut" olarak algılanır.
         row_str = [str(x).strip() for x in row.tolist()]
         
         if "Boyut" in row_str:
@@ -237,7 +236,6 @@ def parse_excel_gerber_sheet(df):
                 
                 while current_row < len(df):
                     vals = df.iloc[current_row]
-                    # Beden hücresini de temizleyerek alıyoruz
                     beden_raw = str(vals[indices[0]]).strip()
                     
                     # Döngü bitirme koşulları
@@ -246,14 +244,29 @@ def parse_excel_gerber_sheet(df):
                         
                     beden = beden_raw.replace("*", "").strip()
                     
+                    # --- 1. ÇEVRE (Blok 1) ---
                     val_cevre = 0.0
-                    if col_cevre != -1: val_cevre = clean_number_excel(vals[col_cevre])
+                    if col_cevre != -1:
+                        val_cevre = clean_number_excel(vals[col_cevre])
+                    else:
+                        # Fallback: Header bulunamadıysa bloktaki en büyük değeri al
+                        val_cevre = get_max_abs_value_in_range(vals, indices[0]+1, indices[1])
 
+                    # --- 2. EN (Blok 2 - Y Mesafe) ---
                     val_en = 0.0
-                    if col_en != -1: val_en = clean_number_excel(vals[col_en])
+                    if col_en != -1:
+                        val_en = clean_number_excel(vals[col_en])
+                    else:
+                        # Fallback: Header bulunamadıysa bloktaki en büyük değeri al
+                        val_en = get_max_abs_value_in_range(vals, indices[1]+1, indices[2])
                         
+                    # --- 3. BOY (Blok 3 - X Mesafe) ---
                     val_boy = 0.0
-                    if col_boy != -1: val_boy = clean_number_excel(vals[col_boy])
+                    if col_boy != -1:
+                        val_boy = clean_number_excel(vals[col_boy])
+                    else:
+                        # Fallback: Header bulunamadıysa bloktaki en büyük değeri al
+                        val_boy = get_max_abs_value_in_range(vals, indices[2]+1, len(vals))
 
                     part_measurements.append({
                         "Beden": beden,
