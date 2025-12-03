@@ -196,11 +196,14 @@ def parse_excel_gerber_sheet(df):
     1. Blok: Çevre
     2. Blok: En
     3. Blok: Boy
+    DÜZELTME: while döngüsü ile tüm satırları gezerek birden fazla modeli yakalar.
     """
     parts_data = {}
+    idx = 0
+    total_rows = len(df)
     
-    for idx, row in df.iterrows():
-        # Hücre değerlerini temizle
+    while idx < total_rows:
+        row = df.iloc[idx]
         row_str = [str(x).strip() for x in row.tolist()]
         
         if "Boyut" in row_str:
@@ -211,14 +214,10 @@ def parse_excel_gerber_sheet(df):
                 meta = parse_header_info(header_cell)
                 
                 if not meta:
+                    idx += 1
                     continue
                 
                 # --- KESİN BLOK SINIRLARI ---
-                # Kullanıcı Talimatı:
-                # 1. Tablo -> Çevre
-                # 2. Tablo -> En
-                # 3. Tablo -> Boy
-                
                 block_cevre_range = (indices[0]+1, indices[1])
                 block_en_range = (indices[1]+1, indices[2])
                 block_boy_range = (indices[2]+1, min(indices[2] + 20, len(df.columns)))
@@ -258,14 +257,17 @@ def parse_excel_gerber_sheet(df):
                             col_boy = c
                             break
                 
+                # Veri satırlarını oku
                 current_row = idx + 1
                 part_measurements = []
                 
-                while current_row < len(df):
+                while current_row < total_rows:
                     vals = df.iloc[current_row]
                     beden_raw = str(vals[indices[0]]).strip()
                     
+                    # Döngü bitirme koşulları: Boş, "Boyut" veya "nan"
                     if not beden_raw or beden_raw == "Boyut" or beden_raw == "nan" or pd.isna(vals[indices[0]]):
+                        # Eğer yeni bir "Boyut" başlığına geldiysek, bu iç döngüyü kırıp ana döngüde yakalayacağız
                         break
                         
                     beden = beden_raw.replace("*", "").strip()
@@ -306,6 +308,14 @@ def parse_excel_gerber_sheet(df):
                         "meta": meta,
                         "df": pd.DataFrame(part_measurements)
                     }
+                
+                # İç döngü bitti, ana döngüyü (idx) güncelle
+                # current_row şu an ya dosya sonu ya da yeni bir başlığın olduğu satır
+                idx = current_row 
+            else:
+                idx += 1
+        else:
+            idx += 1
 
     return parts_data
 
@@ -314,8 +324,11 @@ def parse_excel_pp_sheet(df):
     Polypattern sayfasını tarar. Birden fazla parça/model olabilir.
     """
     parts_data = {}
+    idx = 0
+    total_rows = len(df)
     
-    for idx, row in df.iterrows():
+    while idx < total_rows:
+        row = df.iloc[idx]
         row_str = [str(x).strip() for x in row.tolist()]
         
         if "Boy" in row_str and "En" in row_str and "Çevre" in row_str:
@@ -323,24 +336,29 @@ def parse_excel_pp_sheet(df):
             meta = parse_header_info(part_header)
             
             if not meta:
+                idx += 1
                 continue
             
             try:
                 col_boy = row_str.index("Boy")
                 col_en = row_str.index("En")
                 col_cevre = row_str.index("Çevre")
-            except: continue
+            except: 
+                idx += 1
+                continue
                 
             current_row = idx + 1
             part_measurements = []
             
-            while current_row < len(df):
+            while current_row < total_rows:
                 vals = df.iloc[current_row]
                 first_cell = str(vals.iloc[0]).strip()
                 
+                # Yeni başlık veya boşluk kontrolü
                 if not first_cell or first_cell == "nan" or "Boy" in str(vals.values):
-                    if "Boy" in str(vals.values): break
+                    if "Boy" in str(vals.values): break # Yeni başlık geldi
                     if not first_cell or first_cell == "nan":
+                        # Boş satır, devam et ama bitirme
                         current_row += 1
                         continue
                 
@@ -356,6 +374,12 @@ def parse_excel_pp_sheet(df):
                         "poly_en": p_en,
                         "poly_cevre": p_cevre
                     })
+                else:
+                    # Sayı ile başlıyorsa veya beden değilse durabiliriz? 
+                    # PP çıktısında bedenler metin olarak başlar.
+                    # Ancak bazen araya başka şeyler girebilir.
+                    pass
+                    
                 current_row += 1
             
             if part_measurements:
@@ -363,6 +387,11 @@ def parse_excel_pp_sheet(df):
                     "meta": meta,
                     "df": pd.DataFrame(part_measurements)
                 }
+            
+            # Ana döngüyü güncelle
+            idx = current_row
+        else:
+            idx += 1
                 
     return parts_data
 
