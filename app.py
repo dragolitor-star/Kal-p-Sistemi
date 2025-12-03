@@ -391,24 +391,18 @@ def parse_excel_pp_sheet(df):
                         current_row += 1
                         continue
                 
-                if first_cell and not first_cell[0].isdigit():
-                    beden = first_cell.replace("*", "").strip()
-                    p_boy = clean_number_excel(vals.iloc[col_boy])
-                    p_en = clean_number_excel(vals.iloc[col_en])
-                    p_cevre = clean_number_excel(vals.iloc[col_cevre])
-                    
-                    part_measurements.append({
-                        "Beden": beden,
-                        "poly_boy": p_boy,
-                        "poly_en": p_en,
-                        "poly_cevre": p_cevre
-                    })
-                else:
-                    # Sayı ile başlıyorsa veya beden değilse durabiliriz? 
-                    # PP çıktısında bedenler metin olarak başlar.
-                    # Ancak bazen araya başka şeyler girebilir.
-                    pass
-                    
+                # DÜZELTME: Beden hücresi doluysa (sayı veya harf farketmez) işle
+                beden = first_cell.replace("*", "").strip()
+                p_boy = clean_number_excel(vals.iloc[col_boy])
+                p_en = clean_number_excel(vals.iloc[col_en])
+                p_cevre = clean_number_excel(vals.iloc[col_cevre])
+                
+                part_measurements.append({
+                    "Beden": beden,
+                    "poly_boy": p_boy,
+                    "poly_en": p_en,
+                    "poly_cevre": p_cevre
+                })
                 current_row += 1
             
             if part_measurements:
