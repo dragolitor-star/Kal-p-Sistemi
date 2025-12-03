@@ -184,18 +184,20 @@ def main():
     elif menu == "Kontrol Listesi / Geçmiş":
         history_page()
 
-def clear_inputs():
-    """Input alanlarını temizleyen yardımcı fonksiyon"""
-    st.session_state["g_cevre"] = ""
-    st.session_state["g_en"] = ""
-    st.session_state["g_boy"] = ""
-    st.session_state["poly_input"] = ""
-    # Eğer analiz sonucu ekranda duruyorsa onu da temizle
-    if 'last_analysis' in st.session_state:
-        del st.session_state['last_analysis']
-
 def new_control_page(user):
     st.header("Yeni Model Ölçü Kontrolü")
+
+    # --- INPUT TEMİZLEME MANTIĞI (SAYFA BAŞINDA) ---
+    # Widget'lar oluşturulmadan önce temizlik yapılır
+    if st.session_state.get('reset_trigger'):
+        st.session_state["g_cevre"] = ""
+        st.session_state["g_en"] = ""
+        st.session_state["g_boy"] = ""
+        st.session_state["poly_input"] = ""
+        if 'last_analysis' in st.session_state:
+            del st.session_state['last_analysis']
+        st.session_state['reset_trigger'] = False
+        st.success("İşlem başarılı! Alanlar temizlendi, sıradaki işlemi yapabilirsiniz.")
 
     # Adım 1: Model Bilgileri
     with st.expander("ℹ️ İşlem Bilgisi", expanded=True):
@@ -319,7 +321,6 @@ def new_control_page(user):
         # --- PARÇAYI KAYDETME VE YENİ PARÇAYA GEÇME ---
         col_btn1, col_btn2 = st.columns([1, 4])
         with col_btn1:
-            # Callback kullanımı: Butona basılınca clear_inputs fonksiyonu çalışacak
             if st.button("💾 Parçayı Listeye Ekle ve Temizle"):
                 part_record = {
                     "parca_adi": st.session_state['current_model']['parca_adi'],
@@ -329,10 +330,8 @@ def new_control_page(user):
                 }
                 st.session_state['model_parts'].append(part_record)
                 
-                # Inputları temizle
-                clear_inputs()
-                
-                st.success("Parça listeye eklendi! Alanlar temizlendi, sıradaki parçayı girebilirsiniz.")
+                # Inputları temizlemek için trigger kurup sayfayı yeniliyoruz
+                st.session_state['reset_trigger'] = True
                 st.rerun()
 
     # --- MODELİ VERİTABANINA YAZMA (Sayfanın en altında veya Sidebar'da olabilir) ---
@@ -354,7 +353,8 @@ def save_to_firestore(user, bu):
         st.session_state['model_parts'] = []
         st.session_state['current_model'] = {}
         del st.session_state['active_session']
-        clear_inputs() # Temizle
+        st.session_state['reset_trigger'] = True # Temizle
+        st.rerun()
         return
 
     model_data = st.session_state['current_model']
@@ -385,7 +385,9 @@ def save_to_firestore(user, bu):
     st.session_state['model_parts'] = []
     st.session_state['current_model'] = {}
     del st.session_state['active_session']
-    clear_inputs() # Yeni model için temizle
+    
+    # Yeni model için inputları temizle
+    st.session_state['reset_trigger'] = True
     st.rerun()
 
 def history_page():
