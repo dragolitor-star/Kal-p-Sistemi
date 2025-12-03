@@ -166,15 +166,36 @@ def extract_part_name_from_header(header_text):
         return match.group(2) # Sadece parça kodunu döndür (OBAS)
     return None
 
+def get_max_abs_value_in_range(row_series, start_idx, end_idx):
+    """
+    Belirtilen aralıktaki (start_idx -> end_idx) en büyük mutlak sayısal değeri bulur.
+    X Mesafe / Y Mesafe karışıklığını çözmek için kullanılır.
+    Ana ölçü her zaman ilgili tablodaki en büyük değerdir (M1 veya Toplam).
+    """
+    max_val = 0.0
+    # Sınır kontrolü
+    limit = min(end_idx, len(row_series))
+    
+    for idx in range(start_idx, limit):
+        val = row_series[idx]
+        num = clean_number(val)
+        # Sadece 0 olmayan ve mantıklı sayıları al
+        if abs(num) > abs(max_val):
+            max_val = num
+            
+    return abs(max_val)
+
 def parse_excel_gerber_sheet(df):
     """
     Gerber sayfasını tarar ve parça parça verileri çıkarır.
+    Dinamik başlık taraması yapar ve en büyük değeri ölçü olarak kabul eder.
     """
     parts_data = {}
     
     for idx, row in df.iterrows():
         row_str = row.astype(str).tolist()
         if "Boyut" in row_str:
+            # Boyut kelimesinin geçtiği tüm indeksleri bul (Genelde 3 tane: Çevre, En, Boy)
             indices = [i for i, x in enumerate(row_str) if x == "Boyut"]
             
             if len(indices) >= 3:
@@ -187,6 +208,11 @@ def parse_excel_gerber_sheet(df):
                 current_row = idx + 1
                 part_measurements = []
                 
+                # Blok Sınırları
+                # Blok 1: indices[0]...indices[1]
+                # Blok 2 (En): indices[1]...indices[2]
+                # Blok 3 (Boy): indices[2]...Satır Sonu
+                
                 while current_row < len(df):
                     vals = df.iloc[current_row]
                     beden_raw = str(vals[indices[0]])
@@ -196,30 +222,15 @@ def parse_excel_gerber_sheet(df):
                         
                     beden = beden_raw.replace("*", "").strip()
                     
-                    # 1. ÇEVRE
-                    block1_vals = vals[indices[0]+1 : indices[1]].tolist()
-                    cevre = 0.0
-                    nums1 = [clean_number(x) for x in block1_vals if isinstance(x, (int, float, str))]
-                    if nums1:
-                        cevre = max(nums1)
+                    # 1. ÇEVRE (Block 1) - Max değer
+                    cevre = get_max_abs_value_in_range(vals, indices[0]+1, indices[1])
 
-                    # 2. EN
-                    en = 0.0
-                    try:
-                        col_y = indices[1] + 4
-                        if col_y < df.shape[1]:
-                             en = abs(clean_number(df.iloc[current_row, col_y]))
-                    except:
-                        pass
+                    # 2. EN (Width) - Block 2'deki en büyük değer
+                    # Sütun ismi aramıyoruz, verinin kendisine güveniyoruz.
+                    en = get_max_abs_value_in_range(vals, indices[1]+1, indices[2])
                         
-                    # 3. BOY
-                    boy = 0.0
-                    try:
-                        col_x = indices[2] + 2
-                        if col_x < df.shape[1]:
-                             boy = abs(clean_number(df.iloc[current_row, col_x]))
-                    except:
-                        pass
+                    # 3. BOY (Length) - Block 3'teki en büyük değer
+                    boy = get_max_abs_value_in_range(vals, indices[2]+1, len(vals))
 
                     part_measurements.append({
                         "Beden": beden,
@@ -305,7 +316,6 @@ def main():
     if 'analysis_results' not in st.session_state:
         st.session_state['analysis_results'] = {}
     if 'excel_metadata' not in st.session_state:
-        # HATA DÜZELTME: Başlangıçta boş sözlük değil, varsayılan değerleri içeren sözlük tanımlıyoruz.
         st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
 
     st.title("🏭 Kalıp Ölçü Kontrol Sistemi")
@@ -416,13 +426,11 @@ def excel_control_page(user):
     # --- SONUÇLARI GÖSTER VE KAYDET ---
     if st.session_state.get('excel_analysis_results'):
         results = st.session_state['excel_analysis_results']
-        # HATA DÜZELTME: .get() kullanılarak key error önlendi
         meta = st.session_state.get('excel_metadata', {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'})
         
         st.divider()
         st.subheader("📊 Analiz Sonuçları")
 
-        # HATA DÜZELTME: Güvenli erişim
         st.info(f"📌 **Tespit Edilen Model:** {meta.get('model', 'Bilinmiyor')} | **Sezon:** {meta.get('season', 'Bilinmiyor')}")
 
         parts_to_save = []
@@ -479,7 +487,6 @@ def excel_control_page(user):
                 
             genel_durum = "Hatalı" if "Hatalı" in genel_durum_list else "Doğru Çevrilmiş"
             
-            # HATA DÜZELTME: Kaydederken meta verisini güvenli çekme
             model_to_save = meta.get('model', 'Bilinmiyor')
             season_to_save = meta.get('season', 'Bilinmiyor')
             
@@ -498,7 +505,6 @@ def excel_control_page(user):
             st.balloons()
             st.success(f"{model_to_save} ({season_to_save}) modeli için tüm parçalar kaydedildi!")
             
-            # State temizle (Varsayılan değerlere döndür)
             st.session_state['excel_analysis_results'] = []
             st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
             st.rerun()
