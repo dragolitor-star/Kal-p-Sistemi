@@ -166,6 +166,19 @@ def extract_part_name_from_header(header_text):
         return match.group(2) # Sadece parça kodunu döndür (OBAS)
     return None
 
+def clean_number_excel(val):
+    """Excel hücre değerini temizleyip float'a çevirir."""
+    try:
+        if isinstance(val, (int, float)):
+            return float(val)
+        val = str(val).replace(',', '.')
+        found = re.findall(r"[-+]?\d*\.\d+|\d+", val)
+        if found:
+            return float(found[0])
+        return 0.0
+    except:
+        return 0.0
+
 def parse_excel_gerber_sheet(df):
     """
     Gerber sayfasını tarar ve parça parça verileri çıkarır.
@@ -228,17 +241,17 @@ def parse_excel_gerber_sheet(df):
                     # 1. ÇEVRE (Toplam sütunundan)
                     val_cevre = 0.0
                     if col_cevre != -1:
-                        val_cevre = clean_number(vals[col_cevre])
+                        val_cevre = clean_number_excel(vals[col_cevre])
 
                     # 2. EN (Y Mesafe sütunundan)
                     val_en = 0.0
                     if col_en != -1:
-                        val_en = clean_number(vals[col_en])
+                        val_en = clean_number_excel(vals[col_en])
                         
                     # 3. BOY (X Mesafe sütunundan)
                     val_boy = 0.0
                     if col_boy != -1:
-                        val_boy = clean_number(vals[col_boy])
+                        val_boy = clean_number_excel(vals[col_boy])
 
                     part_measurements.append({
                         "Beden": beden,
@@ -293,9 +306,9 @@ def parse_excel_pp_sheet(df):
                 
                 if first_cell and not first_cell[0].isdigit():
                     beden = first_cell.replace("*", "").strip()
-                    p_boy = clean_number(vals.iloc[col_boy])
-                    p_en = clean_number(vals.iloc[col_en])
-                    p_cevre = clean_number(vals.iloc[col_cevre])
+                    p_boy = clean_number_excel(vals.iloc[col_boy])
+                    p_en = clean_number_excel(vals.iloc[col_en])
+                    p_cevre = clean_number_excel(vals.iloc[col_cevre])
                     
                     part_measurements.append({
                         "Beden": beden,
@@ -325,6 +338,9 @@ def main():
         st.session_state['analysis_results'] = {}
     if 'excel_metadata' not in st.session_state:
         st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
+    # Dosya yükleyici sıfırlama anahtarı
+    if 'uploader_key' not in st.session_state:
+        st.session_state['uploader_key'] = 0
 
     st.title("🏭 Kalıp Ölçü Kontrol Sistemi")
     st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3022/3022329.png", width=100)
@@ -348,7 +364,8 @@ def excel_control_page(user):
     with col1:
         business_unit = st.selectbox("Business Unit (BU) Seçiniz", ["BU1", "BU3", "BU5"], key="excel_bu")
     
-    uploaded_file = st.file_uploader("Excel Dosyasını Yükleyin (.xlsx)", type=["xlsx"])
+    # Dinamik anahtar (key) kullanarak dosya yükleyiciyi sıfırlanabilir yapıyoruz
+    uploaded_file = st.file_uploader("Excel Dosyasını Yükleyin (.xlsx)", type=["xlsx"], key=f"uploader_{st.session_state['uploader_key']}")
 
     if uploaded_file:
         try:
@@ -488,34 +505,49 @@ def excel_control_page(user):
 
         st.markdown("---")
         
-        if st.button("💾 Tüm Sonuçları Veritabanına Kaydet", type="primary", use_container_width=True):
-            if not db:
-                st.warning("Veritabanı bağlantısı yok.")
-                return
-                
-            genel_durum = "Hatalı" if "Hatalı" in genel_durum_list else "Doğru Çevrilmiş"
-            
-            model_to_save = meta.get('model', 'Bilinmiyor')
-            season_to_save = meta.get('season', 'Bilinmiyor')
-            
-            doc_ref = db.collection('qc_records').document()
-            doc_ref.set({
-                'kullanici': user,
-                'tarih': datetime.now(),
-                'business_unit': business_unit,
-                'model_adi': model_to_save,
-                'sezon': season_to_save,
-                'parca_sayisi': len(parts_to_save),
-                'genel_durum': genel_durum,
-                'parca_detaylari': parts_to_save
-            })
-            
-            st.balloons()
-            st.success(f"{model_to_save} ({season_to_save}) modeli için tüm parçalar kaydedildi!")
-            
-            st.session_state['excel_analysis_results'] = []
-            st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
-            st.rerun()
+        # --- BUTONLARI YAN YANA KOYMAK İÇİN SÜTUN ---
+        col_save, col_reset = st.columns([3, 1])
+        
+        with col_save:
+            if st.button("💾 Tüm Sonuçları Veritabanına Kaydet", type="primary", use_container_width=True):
+                if not db:
+                    st.warning("Veritabanı bağlantısı yok.")
+                else:
+                    genel_durum = "Hatalı" if "Hatalı" in genel_durum_list else "Doğru Çevrilmiş"
+                    
+                    model_to_save = meta.get('model', 'Bilinmiyor')
+                    season_to_save = meta.get('season', 'Bilinmiyor')
+                    
+                    doc_ref = db.collection('qc_records').document()
+                    doc_ref.set({
+                        'kullanici': user,
+                        'tarih': datetime.now(),
+                        'business_unit': business_unit,
+                        'model_adi': model_to_save,
+                        'sezon': season_to_save,
+                        'parca_sayisi': len(parts_to_save),
+                        'genel_durum': genel_durum,
+                        'parca_detaylari': parts_to_save
+                    })
+                    
+                    st.balloons()
+                    st.success(f"{model_to_save} ({season_to_save}) modeli için tüm parçalar kaydedildi!")
+                    
+                    # State temizle
+                    st.session_state['excel_analysis_results'] = []
+                    st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
+                    # Uploader'ı sıfırlamak için anahtarı artır
+                    st.session_state['uploader_key'] += 1
+                    st.rerun()
+        
+        with col_reset:
+            if st.button("🔄 Yeni Dosya / Sıfırla", use_container_width=True):
+                # Verileri temizle
+                st.session_state['excel_analysis_results'] = []
+                st.session_state['excel_metadata'] = {'model': 'Bilinmiyor', 'season': 'Bilinmiyor'}
+                # Dosya yükleyiciyi sıfırlamak için anahtarı artır
+                st.session_state['uploader_key'] += 1
+                st.rerun()
 
 def new_control_page(user):
     st.header("Yeni Model Ölçü Kontrolü (Manuel)")
