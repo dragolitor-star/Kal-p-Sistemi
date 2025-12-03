@@ -100,6 +100,10 @@ def get_max_abs_value_in_range(row_series, start_idx, end_idx):
             max_val = num
     return abs(max_val)
 
+def normalize_header(text):
+    """Başlıkları normalize eder (Boşluksuz, Büyükhard)."""
+    return str(text).upper().replace(" ", "").replace("\t", "").strip()
+
 # --------------------------------------------------------------------------
 # 3. MANUEL GİRİŞ PARSERLARI
 # --------------------------------------------------------------------------
@@ -147,7 +151,6 @@ def parse_gerber_table(text, value_type):
                 if value_type == 'cevre':
                     if numeric_values: val = max(numeric_values)
                 elif value_type == 'en': 
-                    # Manuel girişte Y Mesafe (En) genelde 3. sütun civarı veya büyük değer
                     if '\t' in rest and len(columns) >= 4: val = clean_number(columns[3]) 
                     else:
                         if len(numeric_values) >= 3:
@@ -195,7 +198,6 @@ def parse_excel_gerber_sheet(df):
     parts_data = {}
     
     for idx, row in df.iterrows():
-        # DÜZELTME: Hücre değerlerini string'e çevirip boşlukları temizliyoruz.
         row_str = [str(x).strip() for x in row.tolist()]
         
         if "Boyut" in row_str:
@@ -208,28 +210,48 @@ def parse_excel_gerber_sheet(df):
                 if not meta:
                     continue
                 
-                # Sütun İndeksleri
-                # 1. ÇEVRE (Blok 1): 'Toplam' ara
+                # --- SÜTUN İNDEKSLERİNİ BUL (Esnek Arama) ---
+                
+                # 1. ÇEVRE (Blok 1): "Toplam" ara
                 col_cevre = -1
                 for c in range(indices[0], indices[1]):
-                    if "Toplam" in str(df.iloc[idx, c]):
+                    h = normalize_header(df.iloc[idx, c])
+                    if "TOPLAM" in h:
                         col_cevre = c
                         break
                         
-                # 2. EN (Blok 2): 'Y Mesafe' ara
+                # 2. EN (Blok 2): "Y Mesafe" veya "Toplam" ara
                 col_en = -1
+                # Öncelik: Y Mesafe
                 for c in range(indices[1], indices[2]):
-                    if "Y Mesafe" in str(df.iloc[idx, c]):
+                    h = normalize_header(df.iloc[idx, c])
+                    if "YMESA" in h:
                         col_en = c
                         break
+                # Yedek: Toplam
+                if col_en == -1:
+                    for c in range(indices[1], indices[2]):
+                        h = normalize_header(df.iloc[idx, c])
+                        if "TOPLAM" in h:
+                            col_en = c
+                            break
                         
-                # 3. BOY (Blok 3): 'X Mesafe' ara
+                # 3. BOY (Blok 3): "X Mesafe" veya "Toplam" ara
                 col_boy = -1
                 limit = min(indices[2] + 20, len(df.columns))
+                # Öncelik: X Mesafe
                 for c in range(indices[2], limit):
-                    if "X Mesafe" in str(df.iloc[idx, c]):
+                    h = normalize_header(df.iloc[idx, c])
+                    if "XMESA" in h:
                         col_boy = c
                         break
+                # Yedek: Toplam
+                if col_boy == -1:
+                    for c in range(indices[2], limit):
+                        h = normalize_header(df.iloc[idx, c])
+                        if "TOPLAM" in h:
+                            col_boy = c
+                            break
                 
                 current_row = idx + 1
                 part_measurements = []
@@ -238,34 +260,32 @@ def parse_excel_gerber_sheet(df):
                     vals = df.iloc[current_row]
                     beden_raw = str(vals[indices[0]]).strip()
                     
-                    # Döngü bitirme koşulları
                     if not beden_raw or beden_raw == "Boyut" or beden_raw == "nan" or pd.isna(vals[indices[0]]):
                         break
                         
                     beden = beden_raw.replace("*", "").strip()
                     
-                    # --- 1. ÇEVRE (Blok 1) ---
+                    # --- DEĞERLERİ AL (Fallback ile) ---
+                    
+                    # 1. ÇEVRE
                     val_cevre = 0.0
                     if col_cevre != -1:
                         val_cevre = clean_number_excel(vals[col_cevre])
                     else:
-                        # Fallback: Header bulunamadıysa bloktaki en büyük değeri al
                         val_cevre = get_max_abs_value_in_range(vals, indices[0]+1, indices[1])
 
-                    # --- 2. EN (Blok 2 - Y Mesafe) ---
+                    # 2. EN (Blok 2)
                     val_en = 0.0
                     if col_en != -1:
                         val_en = clean_number_excel(vals[col_en])
                     else:
-                        # Fallback: Header bulunamadıysa bloktaki en büyük değeri al
                         val_en = get_max_abs_value_in_range(vals, indices[1]+1, indices[2])
                         
-                    # --- 3. BOY (Blok 3 - X Mesafe) ---
+                    # 3. BOY (Blok 3)
                     val_boy = 0.0
                     if col_boy != -1:
                         val_boy = clean_number_excel(vals[col_boy])
                     else:
-                        # Fallback: Header bulunamadıysa bloktaki en büyük değeri al
                         val_boy = get_max_abs_value_in_range(vals, indices[2]+1, len(vals))
 
                     part_measurements.append({
@@ -406,7 +426,6 @@ def excel_control_page(user):
                         st.error("Hiçbir Polypattern verisi bulunamadı. Sayfa isimlerinde 'PP' veya 'POLY' geçtiğinden emin olun.")
                     
                     # 2. Eşleştirme ve Analiz
-                    # Sonuçları Model bazında gruplayacağız: { "ModelAdi-Sezon": [Parça1, Parça2...] }
                     grouped_results = {}
                     
                     for unique_id, pp_data in all_pp_parts.items():
@@ -423,7 +442,6 @@ def excel_control_page(user):
                                 df_final['Fark_En'] = (df_final['en'] - df_final['poly_en']).abs()
                                 df_final['Fark_Cevre'] = (df_final['cevre'] - df_final['poly_cevre']).abs()
                                 
-                                # Model Grubu Anahtarı
                                 model_key = f"{meta['model']} ({meta['season']})"
                                 if model_key not in grouped_results:
                                     grouped_results[model_key] = {
@@ -455,7 +473,6 @@ def excel_control_page(user):
         st.divider()
         st.subheader("📊 Analiz Sonuçları (Model Bazlı)")
         
-        # Her Model İçin Ayrı Bir Kart
         for model_key, model_data in results.items():
             with st.container():
                 st.info(f"📌 **Model:** {model_key} | **Parça Sayısı:** {len(model_data['parts'])}")
@@ -488,7 +505,6 @@ def excel_control_page(user):
                         )
                         if hata_var: st.error("Fark tespit edildi.")
                     
-                    # Kayıt formatı hazırla
                     parts_list_for_save.append({
                         "parca_adi": parca_adi,
                         "durum": "Hatalı" if hata_var else "Doğru",
@@ -496,14 +512,12 @@ def excel_control_page(user):
                         "timestamp": datetime.now()
                     })
                 
-                # Her modelin kendi verisini Session State'e kaydedelim ki Save butonuna basınca hazır olsun
                 model_data['save_ready'] = {
                     "genel_durum": "Hatalı" if has_fault_in_model else "Doğru Çevrilmiş",
                     "parts_list": parts_list_for_save
                 }
                 st.markdown("---")
 
-        # --- AKSİYON BUTONLARI ---
         col_save, col_reset = st.columns([3, 1])
         
         with col_save:
@@ -512,7 +526,7 @@ def excel_control_page(user):
                     st.warning("Veritabanı bağlantısı yok.")
                 else:
                     saved_count = 0
-                    batch = db.batch() # Batch write ile daha hızlı ve güvenli
+                    batch = db.batch()
                     
                     for model_key, data in results.items():
                         save_info = data['save_ready']
@@ -535,7 +549,6 @@ def excel_control_page(user):
                     st.balloons()
                     st.success(f"{saved_count} adet model başarıyla veritabanına kaydedildi!")
                     
-                    # Sıfırla
                     st.session_state['excel_results'] = {}
                     st.session_state['uploader_key'] += 1
                     st.rerun()
@@ -548,7 +561,6 @@ def excel_control_page(user):
 
 def new_control_page(user):
     st.header("Yeni Model Ölçü Kontrolü (Manuel)")
-    # (Bu kısım önceki kodla aynı, özet geçiyorum)
     with st.expander("ℹ️ İşlem Bilgisi", expanded=True):
         c1, c2 = st.columns(2)
         with c1: business_unit = st.selectbox("BU Seçiniz", ["BU1", "BU3", "BU5"])
