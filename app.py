@@ -166,29 +166,13 @@ def extract_part_name_from_header(header_text):
         return match.group(2) # Sadece parça kodunu döndür (OBAS)
     return None
 
-def get_max_abs_value_in_range(row_series, start_idx, end_idx):
-    """
-    Belirtilen aralıktaki (start_idx -> end_idx) en büyük mutlak sayısal değeri bulur.
-    X Mesafe / Y Mesafe karışıklığını çözmek için kullanılır.
-    Ana ölçü her zaman ilgili tablodaki en büyük değerdir (M1 veya Toplam).
-    """
-    max_val = 0.0
-    # Sınır kontrolü
-    limit = min(end_idx, len(row_series))
-    
-    for idx in range(start_idx, limit):
-        val = row_series[idx]
-        num = clean_number(val)
-        # Sadece 0 olmayan ve mantıklı sayıları al
-        if abs(num) > abs(max_val):
-            max_val = num
-            
-    return abs(max_val)
-
 def parse_excel_gerber_sheet(df):
     """
     Gerber sayfasını tarar ve parça parça verileri çıkarır.
-    Dinamik başlık taraması yapar ve en büyük değeri ölçü olarak kabul eder.
+    Mantık (Kullanıcı Talebi):
+    1. Tablo (Çevre): 'Toplam' sütunu.
+    2. Tablo (En): 'Y Mesafe' sütunu.
+    3. Tablo (Boy): 'X Mesafe' sütunu.
     """
     parts_data = {}
     
@@ -204,14 +188,33 @@ def parse_excel_gerber_sheet(df):
                 
                 if not part_name:
                     continue
-                    
+                
+                # --- SÜTUN İNDEKSLERİNİ BAŞLIKLARA GÖRE BUL ---
+                
+                # 1. ÇEVRE (Blok 1): indices[0] -> indices[1] arasında "Toplam" ara
+                col_cevre = -1
+                for c in range(indices[0], indices[1]):
+                    if "Toplam" in str(df.iloc[idx, c]):
+                        col_cevre = c
+                        break
+                        
+                # 2. EN (Blok 2): indices[1] -> indices[2] arasında "Y Mesafe" ara
+                col_en = -1
+                for c in range(indices[1], indices[2]):
+                    if "Y Mesafe" in str(df.iloc[idx, c]):
+                        col_en = c
+                        break
+                        
+                # 3. BOY (Blok 3): indices[2] -> Satır Sonu arasında "X Mesafe" ara
+                col_boy = -1
+                limit = min(indices[2] + 20, len(df.columns)) # Makul bir arama sınırı
+                for c in range(indices[2], limit):
+                    if "X Mesafe" in str(df.iloc[idx, c]):
+                        col_boy = c
+                        break
+                
                 current_row = idx + 1
                 part_measurements = []
-                
-                # Blok Sınırları
-                # Blok 1: indices[0]...indices[1]
-                # Blok 2: indices[1]...indices[2] (BOY / X Mesafe)
-                # Blok 3: indices[2]...Satır Sonu (EN / Y Mesafe)
                 
                 while current_row < len(df):
                     vals = df.iloc[current_row]
@@ -222,22 +225,26 @@ def parse_excel_gerber_sheet(df):
                         
                     beden = beden_raw.replace("*", "").strip()
                     
-                    # 1. ÇEVRE (Block 1) - Max değer
-                    cevre = get_max_abs_value_in_range(vals, indices[0]+1, indices[1])
+                    # 1. ÇEVRE (Toplam sütunundan)
+                    val_cevre = 0.0
+                    if col_cevre != -1:
+                        val_cevre = clean_number(vals[col_cevre])
 
-                    # 2. BOY (Length/X Mesafe) - Block 2'deki en büyük değer
-                    # Kullanıcı bildirimine göre 2. blok Boy (X Mesafe) tablosudur.
-                    boy = get_max_abs_value_in_range(vals, indices[1]+1, indices[2])
+                    # 2. EN (Y Mesafe sütunundan)
+                    val_en = 0.0
+                    if col_en != -1:
+                        val_en = clean_number(vals[col_en])
                         
-                    # 3. EN (Width/Y Mesafe) - Block 3'teki en büyük değer
-                    # Kullanıcı bildirimine göre 3. blok En (Y Mesafe) tablosudur.
-                    en = get_max_abs_value_in_range(vals, indices[2]+1, len(vals))
+                    # 3. BOY (X Mesafe sütunundan)
+                    val_boy = 0.0
+                    if col_boy != -1:
+                        val_boy = clean_number(vals[col_boy])
 
                     part_measurements.append({
                         "Beden": beden,
-                        "cevre": cevre,
-                        "en": en,
-                        "boy": boy
+                        "cevre": abs(val_cevre),
+                        "en": abs(val_en),
+                        "boy": abs(val_boy)
                     })
                     
                     current_row += 1
