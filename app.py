@@ -695,13 +695,168 @@ def new_control_page(user):
             save_to_firestore(user, business_unit)
 
 def history_page():
-    st.header("📋 Geçmiş")
-    if not db: return
-    docs = db.collection('qc_records').order_by('tarih', direction=firestore.Query.DESCENDING).limit(50).stream()
-    data = [d.to_dict() for d in docs]
-    if data:
+    st.header("📋 Geçmiş Kayıtlar ve Detaylı Analiz")
+    
+    if not db:
+        st.warning("Veritabanı bağlantısı yok.")
+        return
+
+    # --- FİLTRELEME ---
+    col1, col2 = st.columns(2)
+    with col1:
+        search_term = st.text_input("🔍 Model, Sezon veya Kullanıcı Ara", placeholder="Örn: UTJW...")
+    with col2:
+        filter_status = st.selectbox("Durum Filtresi", ["Tümü", "Hatalı", "Doğru Çevrilmiş"])
+
+    try:
+        # Veriyi Çek (Son 100 kayıt)
+        docs = db.collection('qc_records').order_by('tarih', direction=firestore.Query.DESCENDING).limit(100).stream()
+        
+        data = []
+        for doc in docs:
+            d = doc.to_dict()
+            
+            # --- DETAYLI ANALİZ HESAPLAMALARI ---
+            parts = d.get('parca_detaylari', [])
+            faulty_parts = [p for p in parts if p.get('durum') == 'Hatalı']
+            
+            # 1. Hatalı Parça Sayısı
+            d['hatali_parca_sayisi'] = len(faulty_parts)
+            
+            # 2. Hata Açıklaması ve Maksimum Sapma
+            error_summaries = []
+            max_deviation = 0.0
+            
+            for p in faulty_parts:
+                p_name = p.get('parca_adi', 'Parça')
+                details = p.get('hata_detayi', [])
+                
+                p_errors = []
+                for det in details:
+                    beden = det.get('Beden', '?')
+                    diffs = []
+                    
+                    # Farkları kontrol et
+                    f_boy = det.get('Fark_Boy', 0)
+                    f_en = det.get('Fark_En', 0)
+                    f_cevre = det.get('Fark_Cevre', 0)
+                    
+                    # Mutlak değerleri al (Negatif farklar da hata sayılır)
+                    abs_boy = abs(f_boy)
+                    abs_en = abs(f_en)
+                    abs_cevre = abs(f_cevre)
+                    
+                    if abs_boy > 0.05: diffs.append(f"Boy:{f_boy:.2f}")
+                    if abs_en > 0.05: diffs.append(f"En:{f_en:.2f}")
+                    if abs_cevre > 0.05: diffs.append(f"Çevre:{f_cevre:.2f}")
+                    
+                    # Maksimum sapmayı güncelle
+                    current_max = max(abs_boy, abs_en, abs_cevre)
+                    if current_max > max_deviation:
+                        max_deviation = current_max
+                    
+                    if diffs:
+                        p_errors.append(f"{beden}[{', '.join(diffs)}]")
+                
+                if p_errors:
+                    error_summaries.append(f"{p_name}: " + " ".join(p_errors))
+            
+            d['hata_aciklamasi'] = " | ".join(error_summaries) if error_summaries else ""
+            d['maks_hata_miktari'] = max_deviation
+            
+            # Tarih formatı (Timestamp -> String)
+            if 'tarih' in d and d['tarih']:
+                d['tarih_str'] = pd.to_datetime(d['tarih']).strftime('%Y-%m-%d %H:%M')
+            else:
+                d['tarih_str'] = "-"
+
+            data.append(d)
+            
+        if not data:
+            st.info("Henüz kayıt bulunmamaktadır.")
+            return
+
         df = pd.DataFrame(data)
-        st.dataframe(df[['tarih', 'model_adi', 'genel_durum', 'parca_sayisi']])
+        
+        # --- FİLTRELERİ UYGULA ---
+        if search_term:
+            term = search_term.lower()
+            df = df[
+                df['model_adi'].str.lower().str.contains(term, na=False) | 
+                df['kullanici'].str.lower().str.contains(term, na=False) |
+                df['sezon'].str.lower().str.contains(term, na=False)
+            ]
+            
+        if filter_status != "Tümü":
+            df = df[df['genel_durum'] == filter_status]
+
+        # --- TABLO GÖSTERİMİ ---
+        st.subheader(f"Bulunan Kayıtlar ({len(df)})")
+        
+        # Gösterilecek sütunlar ve isimleri
+        display_cols = {
+            'tarih_str': 'Tarih',
+            'kullanici': 'Kullanıcı',
+            'business_unit': 'BU',
+            'model_adi': 'Model',
+            'sezon': 'Sezon',
+            'genel_durum': 'Durum',
+            'parca_sayisi': 'Parça Sayısı',
+            'hatali_parca_sayisi': 'Hatalı Parça',
+            'maks_hata_miktari': 'Max Sapma',
+            'hata_aciklamasi': 'Hata Özeti'
+        }
+        
+        # Mevcut olan sütunları seç
+        cols_to_use = [c for c in display_cols.keys() if c in df.columns]
+        df_display = df[cols_to_use].rename(columns=display_cols)
+        
+        st.dataframe(
+            df_display.style.applymap(
+                lambda x: 'color: red; font-weight: bold' if x == 'Hatalı' else ('color: green; font-weight: bold' if x == 'Doğru Çevrilmiş' else ''),
+                subset=['Durum']
+            ),
+            use_container_width=True
+        )
+        
+        # --- DETAY GÖRÜNÜMÜ ---
+        st.markdown("---")
+        st.subheader("🔍 Kayıt Detayları")
+        
+        # Seçim kutusu için benzersiz bir liste oluştur (Model Adı + Tarih)
+        # Benzersiz ID oluşturmak için index kullanabiliriz ama kullanıcıya anlamlı bir şey göstermeliyiz
+        if not df.empty:
+            model_choices = df.apply(lambda x: f"{x['model_adi']} ({x['sezon']}) - {x['tarih_str']}", axis=1).tolist()
+            selected_option = st.selectbox("İncelemek istediğiniz kaydı seçin:", model_choices)
+            
+            if selected_option:
+                # Seçilen satırı bul
+                selected_index = model_choices.index(selected_option)
+                selected_row = df.iloc[selected_index]
+                
+                c1, c2, c3 = st.columns(3)
+                c1.info(f"**Model:** {selected_row['model_adi']}")
+                c2.info(f"**Kullanıcı:** {selected_row['kullanici']}")
+                c3.info(f"**Tarih:** {selected_row['tarih_str']}")
+                
+                # Parça Detayları
+                parts_list = selected_row.get('parca_detaylari', [])
+                if parts_list:
+                    st.write("### Parça Listesi")
+                    for p in parts_list:
+                        status_emoji = "⚠️" if p['durum'] == "Hatalı" else "✅"
+                        with st.expander(f"{status_emoji} {p['parca_adi']} ({p['durum']})"):
+                            # Hata detayı varsa göster
+                            if p['durum'] == "Hatalı" and 'hata_detayi' in p:
+                                st.error("Tespit Edilen Farklar:")
+                                st.dataframe(pd.DataFrame(p['hata_detayi']))
+                            else:
+                                st.success("Bu parçada ölçü farkı bulunmamıştır.")
+                else:
+                    st.warning("Bu kayıt için parça detayı bulunamadı.")
+
+    except Exception as e:
+        st.error(f"Veri çekilirken hata oluştu: {e}")
 
 if __name__ == "__main__":
     main()
