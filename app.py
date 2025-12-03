@@ -410,7 +410,59 @@ def history_page():
         docs = db.collection('qc_records').order_by('tarih', direction=firestore.Query.DESCENDING).limit(50).stream()
         data = []
         for doc in docs:
-            data.append(doc.to_dict())
+            # Firestore'dan gelen ham veriyi al
+            d = doc.to_dict()
+            
+            # --- TABLO İÇİN EKSTRA HESAPLAMALAR ---
+            parts = d.get('parca_detaylari', [])
+            faulty_parts = [p for p in parts if p.get('durum') == 'Hatalı']
+            
+            # 1. Hatalı Parça Sayısı
+            d['hatali_parca_sayisi'] = len(faulty_parts)
+            
+            # 2. Hata Açıklaması ve Maksimum Sapma
+            error_summaries = []
+            max_deviation = 0.0
+            
+            for p in faulty_parts:
+                p_name = p.get('parca_adi', 'Parça')
+                details = p.get('hata_detayi', [])
+                
+                # Bu parça için hatalı bedenleri ve farkları topla
+                p_errors = []
+                for det in details:
+                    beden = det.get('Beden', '?')
+                    
+                    # Hangi ölçülerde hata var?
+                    diffs = []
+                    # Fark sütunlarının değerlerini kontrol et
+                    f_boy = det.get('Fark_Boy', 0)
+                    f_en = det.get('Fark_En', 0)
+                    f_cevre = det.get('Fark_Cevre', 0)
+                    
+                    # Tolerans (0.05) üzerindeki farkları açıklamaya ekle
+                    if f_boy > 0.05: diffs.append(f"Boy:{f_boy:.2f}")
+                    if f_en > 0.05: diffs.append(f"En:{f_en:.2f}")
+                    if f_cevre > 0.05: diffs.append(f"Çevre:{f_cevre:.2f}")
+                    
+                    # Maksimum hata miktarını güncelle
+                    current_max = max(f_boy, f_en, f_cevre)
+                    if current_max > max_deviation:
+                        max_deviation = current_max
+                    
+                    if diffs:
+                        p_errors.append(f"{beden}[{', '.join(diffs)}]")
+                
+                if p_errors:
+                    # Örn: "Pantolon: S[Boy:0.12], M[En:0.08]"
+                    error_summaries.append(f"{p_name}: " + " ".join(p_errors))
+            
+            # Tüm parçaların hata özetlerini birleştir
+            d['hata_aciklamasi'] = " | ".join(error_summaries) if error_summaries else "Hata Yok"
+            d['maks_hata_miktari'] = max_deviation
+            
+            data.append(d)
+            
         df = pd.DataFrame(data)
         
         if not df.empty:
@@ -420,15 +472,49 @@ def history_page():
                 df = df[df['model_adi'].str.contains(search_term, case=False, na=False) | 
                         df['kullanici'].str.contains(search_term, case=False, na=False)]
             
-            st.dataframe(df[['tarih', 'kullanici', 'business_unit', 'model_adi', 'sezon', 'genel_durum', 'parca_sayisi']], use_container_width=True)
+            # Tabloda gösterilecek sütunları ve sırasını belirle
+            cols_order = [
+                'tarih', 'kullanici', 'business_unit', 'model_adi', 'sezon', 
+                'genel_durum', 'parca_sayisi', 'hatali_parca_sayisi', 
+                'maks_hata_miktari', 'hata_aciklamasi'
+            ]
             
-            selected_row = st.selectbox("Detayları Gör:", df['model_adi'].unique())
+            # Veri setinde olmayan kolonlar varsa hata vermemesi için filtrele
+            final_cols = [c for c in cols_order if c in df.columns]
+            
+            st.dataframe(df[final_cols], use_container_width=True)
+            
+            # Detay Görünümü
+            st.divider()
+            selected_row = st.selectbox("Detaylarını görmek istediğiniz modeli seçin:", df['model_adi'].unique())
             if selected_row:
-                detay = df[df['model_adi'] == selected_row].iloc[0]
-                st.write(f"**Parça Detayları ({selected_row}):**")
-                # Tablo formatında detay
-                detay_df = pd.DataFrame(detay['parca_detaylari'])
-                st.dataframe(detay_df[['parca_adi', 'durum', 'timestamp']])
+                # Seçilen modelin ilk kaydını al (varsa)
+                rows = df[df['model_adi'] == selected_row]
+                if not rows.empty:
+                    detay = rows.iloc[0]
+                    st.write(f"### 🔍 Parça Detayları: {selected_row}")
+                    
+                    # Parça detaylarını daha şık bir tabloya çevirelim
+                    detay_list = detay.get('parca_detaylari', [])
+                    if detay_list:
+                        detay_df = pd.DataFrame(detay_list)
+                        # Timestamp sütununu okunur hale getir
+                        if 'timestamp' in detay_df.columns:
+                            detay_df['timestamp'] = pd.to_datetime(detay_df['timestamp']).dt.strftime('%H:%M:%S')
+                        
+                        st.dataframe(
+                            detay_df[['parca_adi', 'durum', 'timestamp']],
+                            use_container_width=True
+                        )
+                        
+                        # Varsa Hata Detaylarını da JSON olarak değil tablo olarak gösterelim
+                        st.write("#### ⚠️ Hata Detayları")
+                        for p in detay_list:
+                            if p['durum'] == 'Hatalı' and p.get('hata_detayi'):
+                                st.caption(f"**{p['parca_adi']}** Hataları:")
+                                st.dataframe(pd.DataFrame(p['hata_detayi']))
+                    else:
+                        st.info("Bu model için parça detayı bulunamadı.")
         else:
             st.info("Kayıt yok.")
     except Exception as e:
