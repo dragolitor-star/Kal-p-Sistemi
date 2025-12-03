@@ -5,6 +5,7 @@ from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 import io
+import hashlib  # Şifreleme için
 
 # --------------------------------------------------------------------------
 # 1. AYARLAR VE FIREBASE BAĞLANTISI
@@ -33,46 +34,87 @@ except:
     db = None 
 
 # --------------------------------------------------------------------------
-# 2. YARDIMCI FONKSİYONLAR
+# 2. KULLANICI YÖNETİMİ VE GÜVENLİK FONKSİYONLARI
+# --------------------------------------------------------------------------
+
+def make_hashes(password):
+    """Şifreyi SHA256 ile hashler."""
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def check_hashes(password, hashed_text):
+    """Girilen şifrenin hash'i ile kayıtlı hash'i karşılaştırır."""
+    if make_hashes(password) == hashed_text:
+        return hashed_text
+    return False
+
+def init_users_db():
+    """Eğer veritabanında kullanıcı tablosu yoksa varsayılan admin oluşturur."""
+    if db:
+        users_ref = db.collection('users')
+        # Koleksiyonda en az 1 döküman var mı kontrol et
+        docs = users_ref.limit(1).stream()
+        if not any(docs):
+            # Varsayılan Admin: admin / 1234
+            users_ref.document('admin').set({
+                'username': 'admin',
+                'password': make_hashes('1234'),
+                'role': 'admin'
+            })
+
+def login_user(username, password):
+    """Giriş işlemini kontrol eder."""
+    if not db: return None, None
+    
+    doc_ref = db.collection('users').document(username)
+    doc = doc_ref.get()
+    
+    if doc.exists:
+        user_data = doc.to_dict()
+        if check_hashes(password, user_data['password']):
+            return True, user_data['role']
+    return False, None
+
+def create_user(username, password, role):
+    """Yeni kullanıcı oluşturur."""
+    if not db: return False
+    try:
+        db.collection('users').document(username).set({
+            'username': username,
+            'password': make_hashes(password),
+            'role': role
+        })
+        return True
+    except:
+        return False
+
+def delete_user(username):
+    """Kullanıcı siler."""
+    if not db: return False
+    try:
+        db.collection('users').document(username).delete()
+        return True
+    except:
+        return False
+
+# --------------------------------------------------------------------------
+# 3. YARDIMCI PARSER FONKSİYONLARI
 # --------------------------------------------------------------------------
 
 def parse_header_info(text):
-    """
-    Header metninden Model, Sezon ve Parça bilgilerini ayrıştırır.
-    Robust Split Yöntemi Kullanır.
-    Örn: L1/UTJW-DW0DW22280-SP26-OBAS -> {model: UTJW..., season: SP26, part: OBAS}
-    Örn: LCS-YSESH7457-SS26-KPIS -> {model: LCS-YSESH7457, season: SS26, part: KPIS}
-    """
     if not isinstance(text, str): return None
-    
     clean_text = text.strip()
-    
-    # 1. Opsiyonel Prefix'i temizle (L1/, M1/ vb.)
     prefix_match = re.match(r"^[LM]\d+\/(.*)", clean_text)
     if prefix_match:
         clean_text = prefix_match.group(1)
         
-    # 2. Tire ile böl
-    # Parça ve Sezon genelde sonda olur. Model adı tire içerebilir.
     parts = clean_text.split('-')
-    
     if len(parts) >= 3:
-        # En az 3 parça varsa: Model - Sezon - Parça
         part_name = parts[-1].strip()
         season = parts[-2].strip()
-        # Geriye kalan her şeyi birleştirip Model yap
         model_name = "-".join(parts[:-2]).strip()
-        
         unique_id = f"{model_name}-{season}-{part_name}"
-        return {
-            "model": model_name,
-            "season": season,
-            "part": part_name,
-            "unique_id": unique_id,
-            "full_text": text
-        }
+        return {"model": model_name, "season": season, "part": part_name, "unique_id": unique_id, "full_text": text}
     
-    # 3. Eğer split işe yaramazsa (örn: tire yoksa), eski regex ile dene (Fallback)
     pattern = r"(?:L\d+\/)?([\w\-\s]+)-([A-Z0-9]+)-([A-Z0-9]+)"
     match = re.search(pattern, text)
     if match:
@@ -80,80 +122,55 @@ def parse_header_info(text):
         season = match.group(2).strip()
         part = match.group(3).strip()
         unique_id = f"{model}-{season}-{part}"
-        return {
-            "model": model,
-            "season": season,
-            "part": part,
-            "unique_id": unique_id,
-            "full_text": text
-        }
-        
+        return {"model": model, "season": season, "part": part, "unique_id": unique_id, "full_text": text}
     return None
 
 def clean_number(val):
-    """Metni floata çevirir."""
     try:
-        if isinstance(val, (int, float)):
-            return float(val)
+        if isinstance(val, (int, float)): return float(val)
         val = str(val).replace(',', '.')
         found = re.findall(r"[-+]?\d*\.\d+|\d+", val)
-        if found:
-            return float(found[0])
+        if found: return float(found[0])
         return 0.0
-    except:
-        return 0.0
+    except: return 0.0
 
 def clean_number_excel(val):
-    """Excel hücre değerini temizleyip float'a çevirir."""
     try:
-        if isinstance(val, (int, float)):
-            return float(val)
+        if isinstance(val, (int, float)): return float(val)
         val = str(val).replace(',', '.')
         found = re.findall(r"[-+]?\d*\.\d+|\d+", val)
-        if found:
-            return float(found[0])
+        if found: return float(found[0])
         return 0.0
-    except:
-        return 0.0
+    except: return 0.0
 
 def get_max_abs_value_in_range(row_series, start_idx, end_idx):
-    """Belirtilen aralıktaki en büyük mutlak sayısal değeri bulur."""
     max_val = 0.0
     limit = min(end_idx, len(row_series))
     for idx in range(start_idx, limit):
         val = row_series[idx]
         num = clean_number_excel(val)
-        if abs(num) > abs(max_val):
-            max_val = num
+        if abs(num) > abs(max_val): max_val = num
     return abs(max_val)
 
 def normalize_header(text):
-    """Başlıkları normalize eder (Boşluksuz, Büyükhard)."""
     return str(text).upper().replace(" ", "").replace("\t", "").strip()
 
 # --------------------------------------------------------------------------
-# 3. MANUEL GİRİŞ PARSERLARI
+# 4. PARSER MANTIKLARI
 # --------------------------------------------------------------------------
 
 def parse_gerber_metadata(text_block):
-    """Manuel giriş için metadan bilgi çeker."""
     if not text_block: return None
     info = parse_header_info(text_block)
     if info:
-        return {
-            "model_adi": info['model'],
-            "sezon": info['season'],
-            "parca_adi": info['part']
-        }
+        return {"model_adi": info['model'], "sezon": info['season'], "parca_adi": info['part']}
     return None
 
 def parse_gerber_table(text, value_type):
-    """Manuel giriş Gerber parser."""
     if not text: return pd.DataFrame()
     lines = text.strip().split('\n')
     data = []
     size_pattern = r"^(\*?[A-Z0-9]+)\s+(.*)" 
-
     for line in lines:
         line = line.strip()
         if not line: continue
@@ -161,41 +178,31 @@ def parse_gerber_table(text, value_type):
         if match:
             beden = match.group(1).replace("*", "")
             rest = match.group(2)
-            if '\t' in rest:
-                columns = [c.strip() for c in rest.split('\t')] 
-            else:
-                columns = re.split(r'\s+', rest)
-
+            columns = [c.strip() for c in rest.split('\t')] if '\t' in rest else re.split(r'\s+', rest)
             try:
                 val = 0.0
                 numeric_values = []
                 for c in columns:
                     try:
-                        if c and any(char.isdigit() for char in c):
-                            numeric_values.append(clean_number(c))
+                        if c and any(char.isdigit() for char in c): numeric_values.append(clean_number(c))
                     except: pass
-
                 if value_type == 'cevre':
                     if numeric_values: val = max(numeric_values)
                 elif value_type == 'en': 
-                    # Manuel girişte Y Mesafe (En) genelde 3. sütun civarı veya büyük değer
                     if '\t' in rest and len(columns) >= 4: val = clean_number(columns[3]) 
                     else:
                         if len(numeric_values) >= 3:
                             for v in numeric_values[2:]:
                                 if abs(v) > 1.0: 
-                                    val = v
-                                    break
+                                    val = v; break
                             if val == 0.0 and len(numeric_values) > 2: val = numeric_values[2]
                 elif value_type == 'boy': 
                      if len(numeric_values) > 1: val = numeric_values[1]
-
                 data.append({"Beden": beden, value_type: abs(val)})
             except: continue
     return pd.DataFrame(data)
 
 def parse_polypattern(text):
-    """Manuel giriş Polypattern parser."""
     if not text: return pd.DataFrame()
     lines = text.strip().split('\n')
     data = []
@@ -205,217 +212,103 @@ def parse_polypattern(text):
         if len(parts) >= 4:
             if not parts[0][0].isdigit():
                 try:
-                    data.append({
-                        "Beden": parts[0],
-                        "poly_boy": clean_number(parts[1]),
-                        "poly_en": clean_number(parts[2]),
-                        "poly_cevre": clean_number(parts[3])
-                    })
+                    data.append({"Beden": parts[0], "poly_boy": clean_number(parts[1]), "poly_en": clean_number(parts[2]), "poly_cevre": clean_number(parts[3])})
                 except: continue
     return pd.DataFrame(data)
 
-# --------------------------------------------------------------------------
-# 4. EXCEL PARSER FONKSİYONLARI (OTOMATİK ÇOKLU MODEL)
-# --------------------------------------------------------------------------
-
 def parse_excel_gerber_sheet(df):
-    """
-    Gerber sayfasını tarar. 
-    KESİN POZİSYONEL MANTIK:
-    1. Blok: Çevre
-    2. Blok: En
-    3. Blok: Boy
-    DÜZELTME: while döngüsü ile tüm satırları gezerek birden fazla modeli yakalar.
-    """
     parts_data = {}
     idx = 0
     total_rows = len(df)
-    
     while idx < total_rows:
         row = df.iloc[idx]
         row_str = [str(x).strip() for x in row.tolist()]
-        
         if "Boyut" in row_str:
             indices = [i for i, x in enumerate(row_str) if x == "Boyut"]
-            
             if len(indices) >= 3:
                 header_cell = str(df.iloc[idx, indices[0]+1])
                 meta = parse_header_info(header_cell)
-                
                 if not meta:
-                    idx += 1
-                    continue
+                    idx += 1; continue
                 
-                # --- KESİN BLOK SINIRLARI ---
-                block_cevre_range = (indices[0]+1, indices[1])
-                block_en_range = (indices[1]+1, indices[2])
-                block_boy_range = (indices[2]+1, min(indices[2] + 20, len(df.columns)))
+                block_cevre = (indices[0]+1, indices[1])
+                block_en = (indices[1]+1, indices[2])
+                block_boy = (indices[2]+1, min(indices[2] + 20, len(df.columns)))
                 
-                # --- SÜTUN İNDEKSLERİNİ BUL ---
-                
-                # 1. ÇEVRE (Blok 1): Genelde "Toplam"
                 col_cevre = -1
-                for c in range(block_cevre_range[0], block_cevre_range[1]):
-                    if "TOPLAM" in normalize_header(df.iloc[idx, c]):
-                        col_cevre = c
-                        break
+                for c in range(block_cevre[0], block_cevre[1]):
+                    if "TOPLAM" in normalize_header(df.iloc[idx, c]): col_cevre = c; break
                 
-                # 2. EN (Blok 2): "Y Mesafe" veya "Toplam"
                 col_en = -1
-                for c in range(block_en_range[0], block_en_range[1]):
-                    h = normalize_header(df.iloc[idx, c])
-                    if "YMESA" in h:
-                        col_en = c
-                        break
-                if col_en == -1: # Yedek: Toplam
-                    for c in range(block_en_range[0], block_en_range[1]):
-                        if "TOPLAM" in normalize_header(df.iloc[idx, c]):
-                            col_en = c
-                            break
+                for c in range(block_en[0], block_en[1]):
+                    if "YMESA" in normalize_header(df.iloc[idx, c]): col_en = c; break
+                if col_en == -1:
+                    for c in range(block_en[0], block_en[1]):
+                        if "TOPLAM" in normalize_header(df.iloc[idx, c]): col_en = c; break
 
-                # 3. BOY (Blok 3): "X Mesafe" veya "Toplam"
                 col_boy = -1
-                for c in range(block_boy_range[0], block_boy_range[1]):
-                    h = normalize_header(df.iloc[idx, c])
-                    if "XMESA" in h:
-                        col_boy = c
-                        break
-                if col_boy == -1: # Yedek: Toplam
-                    for c in range(block_boy_range[0], block_boy_range[1]):
-                        if "TOPLAM" in normalize_header(df.iloc[idx, c]):
-                            col_boy = c
-                            break
+                for c in range(block_boy[0], block_boy[1]):
+                    if "XMESA" in normalize_header(df.iloc[idx, c]): col_boy = c; break
+                if col_boy == -1:
+                    for c in range(block_boy[0], block_boy[1]):
+                        if "TOPLAM" in normalize_header(df.iloc[idx, c]): col_boy = c; break
                 
-                # Veri satırlarını oku
                 current_row = idx + 1
                 part_measurements = []
-                
                 while current_row < total_rows:
                     vals = df.iloc[current_row]
                     beden_raw = str(vals[indices[0]]).strip()
-                    
-                    # Döngü bitirme koşulları: Boş, "Boyut" veya "nan"
-                    if not beden_raw or beden_raw == "Boyut" or beden_raw == "nan" or pd.isna(vals[indices[0]]):
-                        # Eğer yeni bir "Boyut" başlığına geldiysek, bu iç döngüyü kırıp ana döngüde yakalayacağız
-                        break
-                        
+                    if not beden_raw or beden_raw == "Boyut" or beden_raw == "nan" or pd.isna(vals[indices[0]]): break
                     beden = beden_raw.replace("*", "").strip()
-                    
-                    # --- DEĞERLERİ AL (Smart Fallback ile) ---
-                    
-                    # 1. ÇEVRE
-                    val_cevre = 0.0
-                    if col_cevre != -1:
-                        val_cevre = clean_number_excel(vals[col_cevre])
-                    if val_cevre == 0.0:
-                        val_cevre = get_max_abs_value_in_range(vals, block_cevre_range[0], block_cevre_range[1])
-
-                    # 2. EN (Kesin 2. Blok)
-                    val_en = 0.0
-                    if col_en != -1:
-                        val_en = clean_number_excel(vals[col_en])
-                    if val_en == 0.0:
-                        val_en = get_max_abs_value_in_range(vals, block_en_range[0], block_en_range[1])
-                        
-                    # 3. BOY (Kesin 3. Blok)
-                    val_boy = 0.0
-                    if col_boy != -1:
-                        val_boy = clean_number_excel(vals[col_boy])
-                    if val_boy == 0.0:
-                        val_boy = get_max_abs_value_in_range(vals, block_boy_range[0], block_boy_range[1])
-
-                    part_measurements.append({
-                        "Beden": beden,
-                        "cevre": abs(val_cevre),
-                        "en": abs(val_en),
-                        "boy": abs(val_boy)
-                    })
+                    val_cevre = clean_number_excel(vals[col_cevre]) if col_cevre != -1 else 0.0
+                    if val_cevre == 0.0: val_cevre = get_max_abs_value_in_range(vals, block_cevre[0], block_cevre[1])
+                    val_en = clean_number_excel(vals[col_en]) if col_en != -1 else 0.0
+                    if val_en == 0.0: val_en = get_max_abs_value_in_range(vals, block_en[0], block_en[1])
+                    val_boy = clean_number_excel(vals[col_boy]) if col_boy != -1 else 0.0
+                    if val_boy == 0.0: val_boy = get_max_abs_value_in_range(vals, block_boy[0], block_boy[1])
+                    part_measurements.append({"Beden": beden, "cevre": abs(val_cevre), "en": abs(val_en), "boy": abs(val_boy)})
                     current_row += 1
-                
                 if part_measurements:
-                    parts_data[meta['unique_id']] = {
-                        "meta": meta,
-                        "df": pd.DataFrame(part_measurements)
-                    }
-                
-                # İç döngü bitti, ana döngüyü (idx) güncelle
-                # current_row şu an ya dosya sonu ya da yeni bir başlığın olduğu satır
+                    parts_data[meta['unique_id']] = {"meta": meta, "df": pd.DataFrame(part_measurements)}
                 idx = current_row 
-            else:
-                idx += 1
-        else:
-            idx += 1
-
+            else: idx += 1
+        else: idx += 1
     return parts_data
 
 def parse_excel_pp_sheet(df):
-    """
-    Polypattern sayfasını tarar. Birden fazla parça/model olabilir.
-    """
     parts_data = {}
     idx = 0
     total_rows = len(df)
-    
     while idx < total_rows:
         row = df.iloc[idx]
         row_str = [str(x).strip() for x in row.tolist()]
-        
         if "Boy" in row_str and "En" in row_str and "Çevre" in row_str:
             part_header = str(row.iloc[0])
             meta = parse_header_info(part_header)
-            
             if not meta:
-                idx += 1
-                continue
-            
+                idx += 1; continue
             try:
-                col_boy = row_str.index("Boy")
-                col_en = row_str.index("En")
-                col_cevre = row_str.index("Çevre")
+                col_boy = row_str.index("Boy"); col_en = row_str.index("En"); col_cevre = row_str.index("Çevre")
             except: 
-                idx += 1
-                continue
-                
+                idx += 1; continue
             current_row = idx + 1
             part_measurements = []
-            
             while current_row < total_rows:
                 vals = df.iloc[current_row]
                 first_cell = str(vals.iloc[0]).strip()
-                
-                # Yeni başlık veya boşluk kontrolü
                 if not first_cell or first_cell == "nan" or "Boy" in str(vals.values):
-                    if "Boy" in str(vals.values): break # Yeni başlık geldi
-                    if not first_cell or first_cell == "nan":
-                        # Boş satır, devam et ama bitirme
-                        current_row += 1
-                        continue
-                
-                # DÜZELTME: Beden hücresi doluysa (sayı veya harf farketmez) işle
+                    if "Boy" in str(vals.values): break 
+                    if not first_cell or first_cell == "nan": current_row += 1; continue
                 beden = first_cell.replace("*", "").strip()
                 p_boy = clean_number_excel(vals.iloc[col_boy])
                 p_en = clean_number_excel(vals.iloc[col_en])
                 p_cevre = clean_number_excel(vals.iloc[col_cevre])
-                
-                part_measurements.append({
-                    "Beden": beden,
-                    "poly_boy": p_boy,
-                    "poly_en": p_en,
-                    "poly_cevre": p_cevre
-                })
+                part_measurements.append({"Beden": beden, "poly_boy": p_boy, "poly_en": p_en, "poly_cevre": p_cevre})
                 current_row += 1
-            
             if part_measurements:
-                parts_data[meta['unique_id']] = {
-                    "meta": meta,
-                    "df": pd.DataFrame(part_measurements)
-                }
-            
-            # Ana döngüyü güncelle
+                parts_data[meta['unique_id']] = {"meta": meta, "df": pd.DataFrame(part_measurements)}
             idx = current_row
-        else:
-            idx += 1
-                
+        else: idx += 1
     return parts_data
 
 # --------------------------------------------------------------------------
@@ -423,29 +316,109 @@ def parse_excel_pp_sheet(df):
 # --------------------------------------------------------------------------
 
 def main():
-    if 'current_model' not in st.session_state:
-        st.session_state['current_model'] = {}
-    if 'model_parts' not in st.session_state:
-        st.session_state['model_parts'] = [] 
-    if 'excel_results' not in st.session_state:
-        st.session_state['excel_results'] = {} 
-    if 'uploader_key' not in st.session_state:
-        st.session_state['uploader_key'] = 0
-
-    st.title("🏭 Kalıp Ölçü Kontrol Sistemi")
-    st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3022/3022329.png", width=100)
+    # Session State Başlangıç Değerleri
+    if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
+    if 'username' not in st.session_state: st.session_state['username'] = ""
+    if 'role' not in st.session_state: st.session_state['role'] = ""
     
-    user = st.sidebar.text_input("Kullanıcı Adı", "muhendis_user")
-    menu = st.sidebar.radio("Menü", ["Yeni Ölçü Kontrolü (Manuel)", "Excel ile Otomatik Kontrol", "Kontrol Listesi / Geçmiş"])
+    if 'current_model' not in st.session_state: st.session_state['current_model'] = {}
+    if 'model_parts' not in st.session_state: st.session_state['model_parts'] = [] 
+    if 'excel_results' not in st.session_state: st.session_state['excel_results'] = {} 
+    if 'uploader_key' not in st.session_state: st.session_state['uploader_key'] = 0
+
+    # DB başlat ve varsayılan kullanıcı kontrolü
+    init_users_db()
+
+    # --- GİRİŞ EKRANI ---
+    if not st.session_state['logged_in']:
+        st.title("🔐 Kalıp Ölçü Kontrol - Giriş")
+        
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            with st.form("login_form"):
+                username_input = st.text_input("Kullanıcı Adı")
+                password_input = st.text_input("Şifre", type="password")
+                submit_login = st.form_submit_button("Giriş Yap")
+                
+                if submit_login:
+                    is_valid, role = login_user(username_input, password_input)
+                    if is_valid:
+                        st.session_state['logged_in'] = True
+                        st.session_state['username'] = username_input
+                        st.session_state['role'] = role
+                        st.success("Giriş Başarılı!")
+                        st.rerun()
+                    else:
+                        st.error("Kullanıcı adı veya şifre hatalı!")
+        return
+
+    # --- ANA UYGULAMA (GİRİŞ YAPILDIKTAN SONRA) ---
+    st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3022/3022329.png", width=100)
+    st.sidebar.write(f"👤 **{st.session_state['username']}** ({st.session_state['role']})")
+    
+    if st.sidebar.button("Çıkış Yap"):
+        st.session_state['logged_in'] = False
+        st.session_state['username'] = ""
+        st.session_state['role'] = ""
+        st.rerun()
+
+    # Menü Seçenekleri
+    menu_options = ["Yeni Ölçü Kontrolü (Manuel)", "Excel ile Otomatik Kontrol", "Kontrol Listesi / Geçmiş"]
+    if st.session_state['role'] == 'admin':
+        menu_options.append("Kullanıcı Yönetimi (Admin)")
+        
+    menu = st.sidebar.radio("Menü", menu_options)
 
     if menu == "Yeni Ölçü Kontrolü (Manuel)":
-        new_control_page(user)
+        new_control_page()
     elif menu == "Excel ile Otomatik Kontrol":
-        excel_control_page(user)
+        excel_control_page()
     elif menu == "Kontrol Listesi / Geçmiş":
         history_page()
+    elif menu == "Kullanıcı Yönetimi (Admin)":
+        admin_users_page()
 
-def excel_control_page(user):
+def admin_users_page():
+    st.header("🛠️ Kullanıcı Yönetimi")
+    
+    # Yeni Kullanıcı Ekle
+    with st.expander("Yeni Kullanıcı Ekle"):
+        with st.form("add_user_form"):
+            new_user = st.text_input("Kullanıcı Adı")
+            new_pass = st.text_input("Şifre", type="password")
+            new_role = st.selectbox("Yetki", ["user", "admin"])
+            submitted = st.form_submit_button("Kullanıcı Oluştur")
+            
+            if submitted:
+                if create_user(new_user, new_pass, new_role):
+                    st.success(f"Kullanıcı {new_user} başarıyla oluşturuldu.")
+                else:
+                    st.error("Kullanıcı oluşturulurken hata oluştu (Veritabanı sorunu veya kullanıcı zaten var).")
+
+    st.divider()
+    st.subheader("Mevcut Kullanıcılar")
+    
+    # Kullanıcıları Listele ve Sil
+    if db:
+        users = db.collection('users').stream()
+        user_list = []
+        for u in users:
+            user_list.append(u.to_dict())
+        
+        if user_list:
+            df_users = pd.DataFrame(user_list)
+            st.dataframe(df_users[['username', 'role']], use_container_width=True)
+            
+            user_to_delete = st.selectbox("Silinecek Kullanıcıyı Seçin", df_users['username'].unique())
+            if st.button("Seçili Kullanıcıyı Sil"):
+                if user_to_delete == 'admin' or user_to_delete == st.session_state['username']:
+                    st.error("Kendinizi veya ana admin hesabını silemezsiniz!")
+                else:
+                    delete_user(user_to_delete)
+                    st.success(f"{user_to_delete} silindi!")
+                    st.rerun()
+
+def excel_control_page():
     st.header("📂 Excel ile Çoklu Model Kontrolü")
     st.info("Dosya içerisinde istediğiniz kadar Gerber ve Polypattern sayfası (Gerber1, PP1, Gerber2...) bulunabilir. Sistem hepsini tarayıp modelleri otomatik eşleştirir.")
 
@@ -465,218 +438,114 @@ def excel_control_page(user):
                     all_gerber_parts = {}
                     all_pp_parts = {}
                     
-                    # 1. Tüm Sayfaları Tara
                     for sheet in sheet_names:
                         sheet_upper = sheet.upper()
                         df_sheet = xls[sheet]
-                        
                         if "GERBER" in sheet_upper:
-                            g_parts = parse_excel_gerber_sheet(df_sheet)
-                            all_gerber_parts.update(g_parts)
+                            all_gerber_parts.update(parse_excel_gerber_sheet(df_sheet))
                         elif "PP" in sheet_upper or "POLY" in sheet_upper:
-                            p_parts = parse_excel_pp_sheet(df_sheet)
-                            all_pp_parts.update(p_parts)
+                            all_pp_parts.update(parse_excel_pp_sheet(df_sheet))
                     
-                    if not all_gerber_parts:
-                        st.error("Hiçbir Gerber verisi bulunamadı. Sayfa isimlerinde 'GERBER' geçtiğinden emin olun.")
-                    if not all_pp_parts:
-                        st.error("Hiçbir Polypattern verisi bulunamadı. Sayfa isimlerinde 'PP' veya 'POLY' geçtiğinden emin olun.")
+                    if not all_gerber_parts: st.error("Gerber verisi bulunamadı.")
+                    if not all_pp_parts: st.error("Polypattern verisi bulunamadı.")
                     
-                    # 2. Eşleştirme ve Analiz
                     grouped_results = {}
-                    
                     for unique_id, pp_data in all_pp_parts.items():
                         if unique_id in all_gerber_parts:
                             gerber_data = all_gerber_parts[unique_id]
-                            
-                            df_g = gerber_data['df']
-                            df_p = pp_data['df']
-                            meta = pp_data['meta']
-                            
+                            df_g = gerber_data['df']; df_p = pp_data['df']; meta = pp_data['meta']
                             try:
                                 df_final = df_g.merge(df_p, on="Beden", how="inner")
-                                # FARK HESAPLAMA (GÜNCELLENDİ: Mutlak değer kaldırıldı, işaretli fark gösterilecek)
                                 df_final['Fark_Boy'] = df_final['boy'] - df_final['poly_boy']
                                 df_final['Fark_En'] = df_final['en'] - df_final['poly_en']
                                 df_final['Fark_Cevre'] = df_final['cevre'] - df_final['poly_cevre']
-                                
                                 model_key = f"{meta['model']} ({meta['season']})"
                                 if model_key not in grouped_results:
-                                    grouped_results[model_key] = {
-                                        "model": meta['model'],
-                                        "season": meta['season'],
-                                        "parts": []
-                                    }
-                                
-                                grouped_results[model_key]["parts"].append({
-                                    "parca_adi": meta['part'],
-                                    "df": df_final
-                                })
-                                
-                            except Exception as e:
-                                st.warning(f"{unique_id} birleştirilirken hata: {e}")
-                        else:
-                            st.warning(f"⚠️ {unique_id} Polypattern'de var ama Gerber'de bulunamadı.")
+                                    grouped_results[model_key] = {"model": meta['model'], "season": meta['season'], "parts": []}
+                                grouped_results[model_key]["parts"].append({"parca_adi": meta['part'], "df": df_final})
+                            except: pass
                     
                     st.session_state['excel_results'] = grouped_results
                     st.success(f"İşlem Tamam! Toplam {len(grouped_results)} farklı model bulundu.")
-                    
-                except Exception as e:
-                    st.error(f"Hata oluştu: {e}")
+                except Exception as e: st.error(f"Hata: {e}")
 
-    # --- SONUÇLARI GÖSTER VE KAYDET ---
     if st.session_state.get('excel_results'):
         results = st.session_state['excel_results']
-        
-        st.divider()
-        st.subheader("📊 Analiz Sonuçları (Model Bazlı)")
-        
+        st.divider(); st.subheader("📊 Analiz Sonuçları (Model Bazlı)")
         for model_key, model_data in results.items():
             with st.container():
                 st.info(f"📌 **Model:** {model_key} | **Parça Sayısı:** {len(model_data['parts'])}")
-                
                 parts_list_for_save = []
-                has_fault_in_model = False
-                
+                has_fault = False
                 for part in model_data['parts']:
-                    df = part['df']
-                    parca_adi = part['parca_adi']
-                    
-                    tolerans = 0.05
-                    # HATA KONTROLÜ (GÜNCELLENDİ: Mutlak değer üzerinden kontrol)
-                    hatali_satirlar = df[
-                        (df['Fark_Boy'].abs() > tolerans) | 
-                        (df['Fark_En'].abs() > tolerans) | 
-                        (df['Fark_Cevre'].abs() > tolerans)
-                    ]
+                    df = part['df']; parca_adi = part['parca_adi']; tolerans = 0.05
+                    hatali_satirlar = df[(df['Fark_Boy'].abs()>tolerans)|(df['Fark_En'].abs()>tolerans)|(df['Fark_Cevre'].abs()>tolerans)]
                     hata_var = not hatali_satirlar.empty
-                    if hata_var: has_fault_in_model = True
-                    
-                    emoji = "⚠️" if hata_var else "✅"
-                    with st.expander(f"{emoji} {parca_adi}", expanded=hata_var):
-                        numeric_cols = ['boy', 'poly_boy', 'en', 'poly_en', 'cevre', 'poly_cevre', 'Fark_Boy', 'Fark_En', 'Fark_Cevre']
-                        existing_cols = [c for c in numeric_cols if c in df.columns]
-                        st.dataframe(
-                            df.style.format("{:.2f}", subset=existing_cols).map(
-                                lambda x: 'background-color: #ffcccc' if isinstance(x, (int, float)) and abs(x) > tolerans else '',
-                                subset=['Fark_Boy', 'Fark_En', 'Fark_Cevre']
-                            ), use_container_width=True
-                        )
-                        if hata_var: st.error("Fark tespit edildi.")
-                    
-                    parts_list_for_save.append({
-                        "parca_adi": parca_adi,
-                        "durum": "Hatalı" if hata_var else "Doğru",
-                        "hata_detayi": hatali_satirlar[['Beden', 'Fark_Boy', 'Fark_En', 'Fark_Cevre']].to_dict('records') if hata_var else [],
-                        "timestamp": datetime.now()
-                    })
-                
-                model_data['save_ready'] = {
-                    "genel_durum": "Hatalı" if has_fault_in_model else "Doğru Çevrilmiş",
-                    "parts_list": parts_list_for_save
-                }
+                    if hata_var: has_fault = True
+                    with st.expander(f"{'⚠️' if hata_var else '✅'} {parca_adi}", expanded=hata_var):
+                        cols = ['boy','poly_boy','en','poly_en','cevre','poly_cevre','Fark_Boy','Fark_En','Fark_Cevre']
+                        ex_cols = [c for c in cols if c in df.columns]
+                        st.dataframe(df.style.format("{:.2f}", subset=ex_cols).map(lambda x: 'background-color:#ffcccc' if isinstance(x,(int,float)) and abs(x)>tolerans else '', subset=['Fark_Boy','Fark_En','Fark_Cevre']), use_container_width=True)
+                    parts_list_for_save.append({"parca_adi": parca_adi, "durum": "Hatalı" if hata_var else "Doğru", "hata_detayi": hatali_satirlar[['Beden','Fark_Boy','Fark_En','Fark_Cevre']].to_dict('records') if hata_var else [], "timestamp": datetime.now()})
+                model_data['save_ready'] = {"genel_durum": "Hatalı" if has_fault else "Doğru Çevrilmiş", "parts_list": parts_list_for_save}
                 st.markdown("---")
 
-        col_save, col_reset = st.columns([3, 1])
-        
-        with col_save:
+        c_save, c_reset = st.columns([3, 1])
+        with c_save:
             if st.button("💾 Tüm Modelleri Kaydet", type="primary", use_container_width=True):
-                if not db:
-                    st.warning("Veritabanı bağlantısı yok.")
-                else:
-                    saved_count = 0
-                    batch = db.batch()
-                    
-                    for model_key, data in results.items():
-                        save_info = data['save_ready']
-                        doc_ref = db.collection('qc_records').document()
-                        
-                        doc_data = {
-                            'kullanici': user,
-                            'tarih': datetime.now(),
-                            'business_unit': business_unit,
-                            'model_adi': data['model'],
-                            'sezon': data['season'],
-                            'parca_sayisi': len(save_info['parts_list']),
-                            'genel_durum': save_info['genel_durum'],
-                            'parca_detaylari': save_info['parts_list']
-                        }
-                        batch.set(doc_ref, doc_data)
-                        saved_count += 1
-                    
-                    batch.commit()
-                    st.balloons()
-                    st.success(f"{saved_count} adet model başarıyla veritabanına kaydedildi!")
-                    
-                    st.session_state['excel_results'] = {}
-                    st.session_state['uploader_key'] += 1
-                    st.rerun()
+                if not db: st.warning("DB Bağlantısı Yok"); return
+                batch = db.batch(); cnt = 0
+                for mk, data in results.items():
+                    sinfo = data['save_ready']
+                    doc_ref = db.collection('qc_records').document()
+                    doc_data = {
+                        'kullanici': st.session_state['username'], # Logged in user
+                        'tarih': datetime.now(),
+                        'business_unit': business_unit,
+                        'model_adi': data['model'],
+                        'sezon': data['season'],
+                        'parca_sayisi': len(sinfo['parts_list']),
+                        'genel_durum': sinfo['genel_durum'],
+                        'parca_detaylari': sinfo['parts_list']
+                    }
+                    batch.set(doc_ref, doc_data); cnt += 1
+                batch.commit(); st.balloons(); st.success(f"{cnt} model kaydedildi!"); st.session_state['excel_results']={}; st.session_state['uploader_key']+=1; st.rerun()
+        with c_reset:
+            if st.button("🔄 Sıfırla", use_container_width=True): st.session_state['excel_results']={}; st.session_state['uploader_key']+=1; st.rerun()
 
-        with col_reset:
-            if st.button("🔄 Dosyayı Sıfırla", use_container_width=True):
-                st.session_state['excel_results'] = {}
-                st.session_state['uploader_key'] += 1
-                st.rerun()
-
-def new_control_page(user):
+def new_control_page():
     st.header("Yeni Model Ölçü Kontrolü (Manuel)")
     with st.expander("ℹ️ İşlem Bilgisi", expanded=True):
         c1, c2 = st.columns(2)
         with c1: business_unit = st.selectbox("BU Seçiniz", ["BU1", "BU3", "BU5"])
         with c2: slot_count = st.number_input("Parça Sayısı", 1, 5, 1)
-        if st.session_state.get('active_session'):
-            st.info(f"Model: {st.session_state['current_model'].get('model_adi')}")
-
-    st.divider()
-    tabs = st.tabs([f"Parça {i+1}" for i in range(slot_count)])
-    inputs = {}
+    
+    st.divider(); tabs = st.tabs([f"Parça {i+1}" for i in range(slot_count)]); inputs = {}
     for i, tab in enumerate(tabs):
         with tab:
             c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Gerber")
-                inputs[f"g_cevre_{i}"] = st.text_area("Çevre", height=100, key=f"g_cevre_{i}")
-                inputs[f"g_en_{i}"] = st.text_area("En", height=100, key=f"g_en_{i}")
-                inputs[f"g_boy_{i}"] = st.text_area("Boy", height=100, key=f"g_boy_{i}")
-            with c2:
-                st.subheader("Polypattern")
-                inputs[f"poly_{i}"] = st.text_area("Çıktı", height=340, key=f"poly_{i}")
+            with c1: st.subheader("Gerber"); inputs[f"g_c_{i}"]=st.text_area("Çevre",key=f"g_c{i}",height=100); inputs[f"g_e_{i}"]=st.text_area("En",key=f"g_e{i}",height=100); inputs[f"g_b_{i}"]=st.text_area("Boy",key=f"g_b{i}",height=100)
+            with c2: st.subheader("Polypattern"); inputs[f"poly_{i}"]=st.text_area("Çıktı",key=f"p{i}",height=340)
 
     st.markdown("---")
     if st.button("🔍 Analiz Et", type="primary", use_container_width=True):
         st.session_state['analysis_results'] = {}
         for i in range(slot_count):
-            g_c = inputs[f"g_cevre_{i}"]
-            g_e = inputs[f"g_en_{i}"]
-            g_b = inputs[f"g_boy_{i}"]
-            p = inputs[f"poly_{i}"]
-            
-            if not (g_c and g_e and g_b and p): continue
+            gc=inputs[f"g_c_{i}"]; ge=inputs[f"g_e_{i}"]; gb=inputs[f"g_b_{i}"]; pp=inputs[f"poly_{i}"]
+            if not (gc and ge and gb and pp): continue
             
             if 'active_session' not in st.session_state:
-                meta = parse_gerber_metadata(g_c)
-                if meta:
-                    st.session_state['active_session'] = True
-                    st.session_state['current_model'] = {"model_adi": meta['model_adi'], "sezon": meta['sezon'], "bu": business_unit}
+                meta = parse_gerber_metadata(gc)
+                if meta: st.session_state['active_session']=True; st.session_state['current_model']={"model_adi":meta['model_adi'],"sezon":meta['sezon'],"bu":business_unit}
             
-            local_meta = parse_gerber_metadata(g_c)
-            p_name = local_meta['parca_adi'] if local_meta else f"Parça {i+1}"
+            lmeta = parse_gerber_metadata(gc); pname = lmeta['parca_adi'] if lmeta else f"Parça {i+1}"
+            dfc = parse_gerber_table(gc,'cevre'); dfe = parse_gerber_table(ge,'en'); dfb = parse_gerber_table(gb,'boy'); dfp = parse_polypattern(pp)
             
-            df_gc = parse_gerber_table(g_c, 'cevre')
-            df_ge = parse_gerber_table(g_e, 'en')
-            df_gb = parse_gerber_table(g_b, 'boy')
-            df_p = parse_polypattern(p)
-            
-            if not df_gc.empty and not df_ge.empty and not df_gb.empty and not df_p.empty:
+            if not dfc.empty and not dfe.empty and not dfb.empty and not dfp.empty:
                 try:
-                    df_t = df_gc.merge(df_ge, on="Beden").merge(df_gb, on="Beden")
-                    df_f = df_t.merge(df_p, on="Beden")
-                    # GÜNCELLENDİ: Manuel girişte de fark hesabı işaretli
-                    df_f['Fark_Boy'] = df_f['boy'] - df_f['poly_boy']
-                    df_f['Fark_En'] = df_f['en'] - df_f['poly_en']
-                    df_f['Fark_Cevre'] = df_f['cevre'] - df_f['poly_cevre']
-                    
-                    st.session_state['analysis_results'][i] = {"df": df_f, "parca_adi": p_name, "saved": False}
+                    dft = dfc.merge(dfe, on="Beden").merge(dfb, on="Beden"); dff = dft.merge(dfp, on="Beden")
+                    dff['Fark_Boy']=dff['boy']-dff['poly_boy']; dff['Fark_En']=dff['en']-dff['poly_en']; dff['Fark_Cevre']=dff['cevre']-dff['poly_cevre']
+                    st.session_state['analysis_results'][i]={"df":dff, "parca_adi":pname, "saved":False}
                 except: st.error(f"Parça {i+1} hatası.")
 
     if st.session_state.get('analysis_results'):
@@ -684,179 +553,94 @@ def new_control_page(user):
             if res['saved']: continue
             with st.expander(f"Sonuç: {res['parca_adi']}", expanded=True):
                 st.dataframe(res['df'])
-                if st.button(f"Listeye Ekle {i}", key=f"btn_{i}"):
-                    # Kayıt mantığı (kısalttım)
-                    st.session_state['model_parts'].append({"parca_adi": res['parca_adi'], "durum": "Doğru", "timestamp": datetime.now()})
-                    st.session_state['analysis_results'][i]['saved'] = True
-                    st.rerun()
+                if st.button(f"Ekle {i}", key=f"b_{i}"):
+                    st.session_state['model_parts'].append({"parca_adi":res['parca_adi'], "durum":"Doğru", "timestamp":datetime.now()}) #Basit kayıt
+                    st.session_state['analysis_results'][i]['saved']=True; st.rerun()
 
     if st.session_state.get('active_session') and st.session_state['model_parts']:
-        if st.button("Bitir ve Kaydet"):
-            save_to_firestore(user, business_unit)
+        if st.button("Bitir ve Kaydet"): save_to_firestore(st.session_state['username'], business_unit)
+
+def save_to_firestore(user, bu):
+    if not db: return
+    mdata = st.session_state['current_model']; parts = st.session_state['model_parts']
+    genel = "Doğru Çevrilmiş"
+    # Hata kontrolü basitçe manuelde eklenmediyse diye varsayalım, detaylı eklenebilir.
+    db.collection('qc_records').add({
+        'kullanici': user, 'tarih': datetime.now(), 'business_unit': bu,
+        'model_adi': mdata.get('model_adi'), 'sezon': mdata.get('sezon'),
+        'parca_sayisi': len(parts), 'genel_durum': genel, 'parca_detaylari': parts
+    })
+    st.success("Kaydedildi!"); st.session_state['model_parts']=[]; st.session_state['current_model']={}; st.session_state['analysis_results']={}; del st.session_state['active_session']; st.rerun()
 
 def history_page():
-    st.header("📋 Geçmiş Kayıtlar ve Detaylı Analiz")
+    st.header("📋 Geçmiş Kayıtlar")
+    if not db: st.warning("DB Yok"); return
     
-    if not db:
-        st.warning("Veritabanı bağlantısı yok.")
-        return
+    c1, c2 = st.columns(2)
+    term = c1.text_input("🔍 Ara")
+    status = c2.selectbox("Filtre", ["Tümü", "Hatalı", "Doğru Çevrilmiş"])
+    
+    # SORGULAMA MANTIĞI: Admin her şeyi görür, User sadece kendisininkini.
+    query = db.collection('qc_records')
+    if st.session_state['role'] != 'admin':
+        query = query.where('kullanici', '==', st.session_state['username'])
+    
+    query = query.order_by('tarih', direction=firestore.Query.DESCENDING).limit(100)
+    docs = query.stream()
+    
+    data = []
+    for doc in docs:
+        d = doc.to_dict(); d['id'] = doc.id
+        # Hata Analizi
+        parts = d.get('parca_detaylari', [])
+        faults = [p for p in parts if p.get('durum') == 'Hatalı']
+        d['hatali_sayi'] = len(faults)
+        
+        max_dev = 0.0; summaries = []
+        for p in faults:
+            p_errs = []
+            for det in p.get('hata_detayi', []):
+                fb=det.get('Fark_Boy',0); fe=det.get('Fark_En',0); fc=det.get('Fark_Cevre',0)
+                curr_max = max(abs(fb), abs(fe), abs(fc))
+                if curr_max > max_dev: max_dev = curr_max
+                errs = []
+                if abs(fb)>0.05: errs.append(f"Boy:{fb:.2f}")
+                if abs(fe)>0.05: errs.append(f"En:{fe:.2f}")
+                if abs(fc)>0.05: errs.append(f"Çv:{fc:.2f}")
+                if errs: p_errs.append(f"{det.get('Beden','?')}[{','.join(errs)}]")
+            if p_errs: summaries.append(f"{p.get('parca_adi')}: {' '.join(p_errs)}")
+        
+        d['hata_ozeti'] = " | ".join(summaries)
+        d['max_sapma'] = max_dev
+        d['tarih_str'] = pd.to_datetime(d['tarih']).strftime('%Y-%m-%d %H:%M') if d.get('tarih') else "-"
+        data.append(d)
 
-    # --- FİLTRELEME ---
-    col1, col2 = st.columns(2)
-    with col1:
-        search_term = st.text_input("🔍 Model, Sezon veya Kullanıcı Ara", placeholder="Örn: UTJW...")
-    with col2:
-        filter_status = st.selectbox("Durum Filtresi", ["Tümü", "Hatalı", "Doğru Çevrilmiş"])
-
-    try:
-        # Veriyi Çek (Son 100 kayıt)
-        docs = db.collection('qc_records').order_by('tarih', direction=firestore.Query.DESCENDING).limit(100).stream()
+    if not data: st.info("Kayıt bulunamadı."); return
+    
+    df = pd.DataFrame(data)
+    
+    # Filtreleme (Python tarafında)
+    if term:
+        t = term.lower()
+        df = df[df['model_adi'].str.lower().str.contains(t, na=False) | df['sezon'].str.lower().str.contains(t, na=False)]
+    if status != "Tümü":
+        df = df[df['genel_durum'] == status]
         
-        data = []
-        for doc in docs:
-            d = doc.to_dict()
-            
-            # --- DETAYLI ANALİZ HESAPLAMALARI ---
-            parts = d.get('parca_detaylari', [])
-            faulty_parts = [p for p in parts if p.get('durum') == 'Hatalı']
-            
-            # 1. Hatalı Parça Sayısı
-            d['hatali_parca_sayisi'] = len(faulty_parts)
-            
-            # 2. Hata Açıklaması ve Maksimum Sapma
-            error_summaries = []
-            max_deviation = 0.0
-            
-            for p in faulty_parts:
-                p_name = p.get('parca_adi', 'Parça')
-                details = p.get('hata_detayi', [])
-                
-                p_errors = []
-                for det in details:
-                    beden = det.get('Beden', '?')
-                    diffs = []
-                    
-                    # Farkları kontrol et
-                    f_boy = det.get('Fark_Boy', 0)
-                    f_en = det.get('Fark_En', 0)
-                    f_cevre = det.get('Fark_Cevre', 0)
-                    
-                    # Mutlak değerleri al (Negatif farklar da hata sayılır)
-                    abs_boy = abs(f_boy)
-                    abs_en = abs(f_en)
-                    abs_cevre = abs(f_cevre)
-                    
-                    if abs_boy > 0.05: diffs.append(f"Boy:{f_boy:.2f}")
-                    if abs_en > 0.05: diffs.append(f"En:{f_en:.2f}")
-                    if abs_cevre > 0.05: diffs.append(f"Çevre:{f_cevre:.2f}")
-                    
-                    # Maksimum sapmayı güncelle
-                    current_max = max(abs_boy, abs_en, abs_cevre)
-                    if current_max > max_deviation:
-                        max_deviation = current_max
-                    
-                    if diffs:
-                        p_errors.append(f"{beden}[{', '.join(diffs)}]")
-                
-                if p_errors:
-                    error_summaries.append(f"{p_name}: " + " ".join(p_errors))
-            
-            d['hata_aciklamasi'] = " | ".join(error_summaries) if error_summaries else ""
-            d['maks_hata_miktari'] = max_deviation
-            
-            # Tarih formatı (Timestamp -> String)
-            if 'tarih' in d and d['tarih']:
-                d['tarih_str'] = pd.to_datetime(d['tarih']).strftime('%Y-%m-%d %H:%M')
-            else:
-                d['tarih_str'] = "-"
-
-            data.append(d)
-            
-        if not data:
-            st.info("Henüz kayıt bulunmamaktadır.")
-            return
-
-        df = pd.DataFrame(data)
-        
-        # --- FİLTRELERİ UYGULA ---
-        if search_term:
-            term = search_term.lower()
-            df = df[
-                df['model_adi'].str.lower().str.contains(term, na=False) | 
-                df['kullanici'].str.lower().str.contains(term, na=False) |
-                df['sezon'].str.lower().str.contains(term, na=False)
-            ]
-            
-        if filter_status != "Tümü":
-            df = df[df['genel_durum'] == filter_status]
-
-        # --- TABLO GÖSTERİMİ ---
-        st.subheader(f"Bulunan Kayıtlar ({len(df)})")
-        
-        # Gösterilecek sütunlar ve isimleri
-        display_cols = {
-            'tarih_str': 'Tarih',
-            'kullanici': 'Kullanıcı',
-            'business_unit': 'BU',
-            'model_adi': 'Model',
-            'sezon': 'Sezon',
-            'genel_durum': 'Durum',
-            'parca_sayisi': 'Parça Sayısı',
-            'hatali_parca_sayisi': 'Hatalı Parça',
-            'maks_hata_miktari': 'Max Sapma',
-            'hata_aciklamasi': 'Hata Özeti'
-        }
-        
-        # Mevcut olan sütunları seç
-        cols_to_use = [c for c in display_cols.keys() if c in df.columns]
-        df_display = df[cols_to_use].rename(columns=display_cols)
-        
-        st.dataframe(
-            df_display.style.applymap(
-                lambda x: 'color: red; font-weight: bold' if x == 'Hatalı' else ('color: green; font-weight: bold' if x == 'Doğru Çevrilmiş' else ''),
-                subset=['Durum']
-            ),
-            use_container_width=True
-        )
-        
-        # --- DETAY GÖRÜNÜMÜ ---
-        st.markdown("---")
-        st.subheader("🔍 Kayıt Detayları")
-        
-        # Seçim kutusu için benzersiz bir liste oluştur (Model Adı + Tarih)
-        # Benzersiz ID oluşturmak için index kullanabiliriz ama kullanıcıya anlamlı bir şey göstermeliyiz
-        if not df.empty:
-            model_choices = df.apply(lambda x: f"{x['model_adi']} ({x['sezon']}) - {x['tarih_str']}", axis=1).tolist()
-            selected_option = st.selectbox("İncelemek istediğiniz kaydı seçin:", model_choices)
-            
-            if selected_option:
-                # Seçilen satırı bul
-                selected_index = model_choices.index(selected_option)
-                selected_row = df.iloc[selected_index]
-                
-                c1, c2, c3 = st.columns(3)
-                c1.info(f"**Model:** {selected_row['model_adi']}")
-                c2.info(f"**Kullanıcı:** {selected_row['kullanici']}")
-                c3.info(f"**Tarih:** {selected_row['tarih_str']}")
-                
-                # Parça Detayları
-                parts_list = selected_row.get('parca_detaylari', [])
-                if parts_list:
-                    st.write("### Parça Listesi")
-                    for p in parts_list:
-                        status_emoji = "⚠️" if p['durum'] == "Hatalı" else "✅"
-                        with st.expander(f"{status_emoji} {p['parca_adi']} ({p['durum']})"):
-                            # Hata detayı varsa göster
-                            if p['durum'] == "Hatalı" and 'hata_detayi' in p:
-                                st.error("Tespit Edilen Farklar:")
-                                st.dataframe(pd.DataFrame(p['hata_detayi']))
-                            else:
-                                st.success("Bu parçada ölçü farkı bulunmamıştır.")
-                else:
-                    st.warning("Bu kayıt için parça detayı bulunamadı.")
-
-    except Exception as e:
-        st.error(f"Veri çekilirken hata oluştu: {e}")
+    disp_cols = {'tarih_str':'Tarih', 'kullanici':'Kullanıcı', 'business_unit':'BU', 'model_adi':'Model', 'sezon':'Sezon', 'genel_durum':'Durum', 'hatali_sayi':'Hatalı Parça', 'max_sapma':'Max Sapma', 'hata_ozeti':'Detay'}
+    used_cols = [c for c in disp_cols.keys() if c in df.columns]
+    
+    st.dataframe(df[used_cols].rename(columns=disp_cols).style.applymap(lambda x: 'color:red;font-weight:bold' if x=='Hatalı' else ('color:green;font-weight:bold' if x=='Doğru Çevrilmiş' else ''), subset=['Durum']), use_container_width=True)
+    
+    st.markdown("---"); st.subheader("🔍 Detay İncele")
+    opts = df.apply(lambda x: f"{x['model_adi']} ({x['sezon']}) - {x['tarih_str']}", axis=1).tolist()
+    sel = st.selectbox("Seç:", opts)
+    if sel:
+        row = df.iloc[opts.index(sel)]
+        c1,c2,c3 = st.columns(3); c1.info(f"Model: {row['model_adi']}"); c2.info(f"User: {row['kullanici']}"); c3.info(f"Tarih: {row['tarih_str']}")
+        for p in row.get('parca_detaylari', []):
+            with st.expander(f"{'⚠️' if p['durum']=='Hatalı' else '✅'} {p['parca_adi']}"):
+                if p['durum']=='Hatalı': st.dataframe(pd.DataFrame(p.get('hata_detayi',[])))
+                else: st.success("Sorunsuz")
 
 if __name__ == "__main__":
     main()
