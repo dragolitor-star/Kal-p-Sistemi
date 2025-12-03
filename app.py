@@ -43,8 +43,7 @@ def parse_header_info(text):
     """
     if not isinstance(text, str): return None
     
-    # Regex Güncellemesi: Daha esnek hale getirildi
-    # (Opsiyonel L1/...) (Model: Boşluk içerebilir) - (Sezon) - (Parça)
+    # Regex: (Opsiyonel L1/...) (Model) - (Sezon) - (Parça)
     pattern = r"(?:L\d+\/)?([\w\-\s]+)-([A-Z]{2}\d{2})-([A-Z0-9]+)"
     match = re.search(pattern, text)
     
@@ -52,7 +51,6 @@ def parse_header_info(text):
         model = match.group(1).strip()
         season = match.group(2).strip()
         part = match.group(3).strip()
-        # Benzersiz kimlik: Model-Sezon-Parça
         unique_id = f"{model}-{season}-{part}"
         return {
             "model": model,
@@ -151,6 +149,7 @@ def parse_gerber_table(text, value_type):
                 if value_type == 'cevre':
                     if numeric_values: val = max(numeric_values)
                 elif value_type == 'en': 
+                    # Manuel girişte Y Mesafe (En) genelde 3. sütun civarı veya büyük değer
                     if '\t' in rest and len(columns) >= 4: val = clean_number(columns[3]) 
                     else:
                         if len(numeric_values) >= 3:
@@ -192,12 +191,16 @@ def parse_polypattern(text):
 
 def parse_excel_gerber_sheet(df):
     """
-    Gerber sayfasını tarar. Birden fazla parça/model olabilir.
-    Her bulunan parçayı 'unique_id' (Model-Sezon-Parça) ile sözlüğe ekler.
+    Gerber sayfasını tarar. 
+    KESİN POZİSYONEL MANTIK:
+    1. Blok: Çevre
+    2. Blok: En
+    3. Blok: Boy
     """
     parts_data = {}
     
     for idx, row in df.iterrows():
+        # Hücre değerlerini temizle
         row_str = [str(x).strip() for x in row.tolist()]
         
         if "Boyut" in row_str:
@@ -210,46 +213,48 @@ def parse_excel_gerber_sheet(df):
                 if not meta:
                     continue
                 
-                # --- SÜTUN İNDEKSLERİNİ BUL (Esnek Arama) ---
+                # --- KESİN BLOK SINIRLARI ---
+                # Kullanıcı Talimatı:
+                # 1. Tablo -> Çevre
+                # 2. Tablo -> En
+                # 3. Tablo -> Boy
                 
-                # 1. ÇEVRE (Blok 1): "Toplam" ara
+                block_cevre_range = (indices[0]+1, indices[1])
+                block_en_range = (indices[1]+1, indices[2])
+                block_boy_range = (indices[2]+1, min(indices[2] + 20, len(df.columns)))
+                
+                # --- SÜTUN İNDEKSLERİNİ BUL ---
+                
+                # 1. ÇEVRE (Blok 1): Genelde "Toplam"
                 col_cevre = -1
-                for c in range(indices[0], indices[1]):
-                    h = normalize_header(df.iloc[idx, c])
-                    if "TOPLAM" in h:
+                for c in range(block_cevre_range[0], block_cevre_range[1]):
+                    if "TOPLAM" in normalize_header(df.iloc[idx, c]):
                         col_cevre = c
                         break
-                        
-                # 2. EN (Blok 2): "Y Mesafe" veya "Toplam" ara
+                
+                # 2. EN (Blok 2): "Y Mesafe" veya "Toplam"
                 col_en = -1
-                # Öncelik: Y Mesafe
-                for c in range(indices[1], indices[2]):
+                for c in range(block_en_range[0], block_en_range[1]):
                     h = normalize_header(df.iloc[idx, c])
                     if "YMESA" in h:
                         col_en = c
                         break
-                # Yedek: Toplam
-                if col_en == -1:
-                    for c in range(indices[1], indices[2]):
-                        h = normalize_header(df.iloc[idx, c])
-                        if "TOPLAM" in h:
+                if col_en == -1: # Yedek: Toplam
+                    for c in range(block_en_range[0], block_en_range[1]):
+                        if "TOPLAM" in normalize_header(df.iloc[idx, c]):
                             col_en = c
                             break
-                        
-                # 3. BOY (Blok 3): "X Mesafe" veya "Toplam" ara
+
+                # 3. BOY (Blok 3): "X Mesafe" veya "Toplam"
                 col_boy = -1
-                limit = min(indices[2] + 20, len(df.columns))
-                # Öncelik: X Mesafe
-                for c in range(indices[2], limit):
+                for c in range(block_boy_range[0], block_boy_range[1]):
                     h = normalize_header(df.iloc[idx, c])
                     if "XMESA" in h:
                         col_boy = c
                         break
-                # Yedek: Toplam
-                if col_boy == -1:
-                    for c in range(indices[2], limit):
-                        h = normalize_header(df.iloc[idx, c])
-                        if "TOPLAM" in h:
+                if col_boy == -1: # Yedek: Toplam
+                    for c in range(block_boy_range[0], block_boy_range[1]):
+                        if "TOPLAM" in normalize_header(df.iloc[idx, c]):
                             col_boy = c
                             break
                 
@@ -265,28 +270,28 @@ def parse_excel_gerber_sheet(df):
                         
                     beden = beden_raw.replace("*", "").strip()
                     
-                    # --- DEĞERLERİ AL (Fallback ile) ---
+                    # --- DEĞERLERİ AL (Smart Fallback ile) ---
                     
                     # 1. ÇEVRE
                     val_cevre = 0.0
                     if col_cevre != -1:
                         val_cevre = clean_number_excel(vals[col_cevre])
-                    else:
-                        val_cevre = get_max_abs_value_in_range(vals, indices[0]+1, indices[1])
+                    if val_cevre == 0.0:
+                        val_cevre = get_max_abs_value_in_range(vals, block_cevre_range[0], block_cevre_range[1])
 
-                    # 2. EN (Blok 2)
+                    # 2. EN (Kesin 2. Blok)
                     val_en = 0.0
                     if col_en != -1:
                         val_en = clean_number_excel(vals[col_en])
-                    else:
-                        val_en = get_max_abs_value_in_range(vals, indices[1]+1, indices[2])
+                    if val_en == 0.0:
+                        val_en = get_max_abs_value_in_range(vals, block_en_range[0], block_en_range[1])
                         
-                    # 3. BOY (Blok 3)
+                    # 3. BOY (Kesin 3. Blok)
                     val_boy = 0.0
                     if col_boy != -1:
                         val_boy = clean_number_excel(vals[col_boy])
-                    else:
-                        val_boy = get_max_abs_value_in_range(vals, indices[2]+1, len(vals))
+                    if val_boy == 0.0:
+                        val_boy = get_max_abs_value_in_range(vals, block_boy_range[0], block_boy_range[1])
 
                     part_measurements.append({
                         "Beden": beden,
