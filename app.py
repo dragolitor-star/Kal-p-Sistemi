@@ -210,8 +210,8 @@ def parse_excel_gerber_sheet(df):
                 
                 # Blok Sınırları
                 # Blok 1: indices[0]...indices[1]
-                # Blok 2 (En): indices[1]...indices[2]
-                # Blok 3 (Boy): indices[2]...Satır Sonu
+                # Blok 2: indices[1]...indices[2] (BOY / X Mesafe)
+                # Blok 3: indices[2]...Satır Sonu (EN / Y Mesafe)
                 
                 while current_row < len(df):
                     vals = df.iloc[current_row]
@@ -225,12 +225,13 @@ def parse_excel_gerber_sheet(df):
                     # 1. ÇEVRE (Block 1) - Max değer
                     cevre = get_max_abs_value_in_range(vals, indices[0]+1, indices[1])
 
-                    # 2. EN (Width) - Block 2'deki en büyük değer
-                    # Sütun ismi aramıyoruz, verinin kendisine güveniyoruz.
-                    en = get_max_abs_value_in_range(vals, indices[1]+1, indices[2])
+                    # 2. BOY (Length/X Mesafe) - Block 2'deki en büyük değer
+                    # Kullanıcı bildirimine göre 2. blok Boy (X Mesafe) tablosudur.
+                    boy = get_max_abs_value_in_range(vals, indices[1]+1, indices[2])
                         
-                    # 3. BOY (Length) - Block 3'teki en büyük değer
-                    boy = get_max_abs_value_in_range(vals, indices[2]+1, len(vals))
+                    # 3. EN (Width/Y Mesafe) - Block 3'teki en büyük değer
+                    # Kullanıcı bildirimine göre 3. blok En (Y Mesafe) tablosudur.
+                    en = get_max_abs_value_in_range(vals, indices[2]+1, len(vals))
 
                     part_measurements.append({
                         "Beden": beden,
