@@ -91,7 +91,10 @@ TRANSLATIONS = {
         "faulty_count": "Hatalı Sayısı",
         "max_dev": "Max Sapma",
         "detail": "Detay",
-        "result": "Sonuç"
+        "result": "Sonuç",
+        "cevre_label": "Çevre",
+        "en_label": "En",
+        "boy_label": "Boy"
     },
     "ENG": {
         "app_title": "🏭 Pattern Measure Control System",
@@ -165,7 +168,10 @@ TRANSLATIONS = {
         "faulty_count": "Fault Count",
         "max_dev": "Max Dev",
         "detail": "Detail",
-        "result": "Result"
+        "result": "Result",
+        "cevre_label": "Circumference",
+        "en_label": "Width",
+        "boy_label": "Length"
     },
     "ARB": {
         "app_title": "🏭 نظام مراقبة قياس الأنماط",
@@ -239,7 +245,10 @@ TRANSLATIONS = {
         "faulty_count": "عدد الأخطاء",
         "max_dev": "أقصى انحراف",
         "detail": "التفاصيل",
-        "result": "النتيجة"
+        "result": "النتيجة",
+        "cevre_label": "المحيط",
+        "en_label": "العرض",
+        "boy_label": "الطول"
     }
 }
 
@@ -957,7 +966,7 @@ def new_control_page(t):
         with tab:
             with st.container():
                 c1, c2 = st.columns(2)
-                with c1: st.subheader(t["gerber_header"]); inputs[f"g_c_{i}"]=st.text_area("Çevre/Circumference/المحيط",key=f"g_c{i}",height=100); inputs[f"g_e_{i}"]=st.text_area("En/Width/العرض",key=f"g_e{i}",height=100); inputs[f"g_b_{i}"]=st.text_area("Boy/Length/الطول",key=f"g_b{i}",height=100)
+                with c1: st.subheader(t["gerber_header"]); inputs[f"g_c_{i}"]=st.text_area(t["cevre_label"],key=f"g_c{i}",height=100); inputs[f"g_e_{i}"]=st.text_area(t["en_label"],key=f"g_e{i}",height=100); inputs[f"g_b_{i}"]=st.text_area(t["boy_label"],key=f"g_b{i}",height=100)
                 with c2: st.subheader(t["pp_header"]); inputs[f"poly_{i}"]=st.text_area("Data",key=f"p{i}",height=340)
 
     st.markdown("---")
