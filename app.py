@@ -8,9 +8,202 @@ import io
 import hashlib  # Şifreleme için
 
 # --------------------------------------------------------------------------
-# 1. AYARLAR VE FIREBASE BAĞLANTISI
+# 1. AYARLAR VE DİL SÖZLÜĞÜ
 # --------------------------------------------------------------------------
-st.set_page_config(page_title="Gerber vs Polypattern Kontrol", layout="wide")
+st.set_page_config(page_title="Gerber vs Polypattern", layout="wide")
+
+# Dil Sözlüğü
+TRANSLATIONS = {
+    "TR": {
+        "app_title": "🏭 Kalıp Ölçü Kontrol Sistemi",
+        "login_title": "🔐 Giriş Yap",
+        "username": "Kullanıcı Adı",
+        "password": "Şifre",
+        "login_btn": "Giriş Yap",
+        "login_success": "Giriş Başarılı!",
+        "login_error": "Kullanıcı adı veya şifre hatalı!",
+        "logout": "Çıkış Yap",
+        "change_pass_title": "🔑 Şifre Değiştir",
+        "curr_pass": "Mevcut Şifre",
+        "new_pass": "Yeni Şifre",
+        "confirm_pass": "Yeni Şifre (Tekrar)",
+        "update_pass_btn": "Şifreyi Güncelle",
+        "pass_update_success": "Şifreniz başarıyla güncellendi!",
+        "pass_update_error": "Şifre güncellenirken hata oluştu.",
+        "pass_mismatch": "Yeni şifreler eşleşmiyor!",
+        "pass_current_err": "Mevcut şifre hatalı!",
+        "menu_header": "Menü",
+        "menu_manual": "Yeni Ölçü Kontrolü (Manuel)",
+        "menu_excel": "Excel ile Otomatik Kontrol",
+        "menu_history": "Kontrol Listesi / Geçmiş",
+        "menu_admin": "Kullanıcı Yönetimi (Admin)",
+        "bu_select": "Business Unit (BU) Seçiniz",
+        "slot_count": "Parça Sayısı",
+        "gerber_header": "Gerber Verileri",
+        "pp_header": "Polypattern Verisi",
+        "analyze_btn": "🔍 Analiz Et",
+        "save_list_btn": "Listeye Ekle",
+        "finish_save_btn": "Bitir ve Kaydet",
+        "save_success": "Kaydedildi!",
+        "error_parse": "Veriler okunamadı.",
+        "excel_title": "📂 Excel ile Çoklu Model Kontrolü",
+        "excel_info": "Dosya içerisinde istediğiniz kadar Gerber ve Polypattern sayfası bulunabilir.",
+        "upload_label": "Excel Dosyasını Yükleyin (.xlsx)",
+        "analyze_file_btn": "🚀 Dosyayı Analiz Et",
+        "reset_btn": "🔄 Sıfırla",
+        "save_all_btn": "💾 Tüm Modelleri Kaydet",
+        "history_title": "📋 Geçmiş Kayıtlar",
+        "search_placeholder": "🔍 Ara (Model, Sezon...)",
+        "filter_status": "Durum Filtresi",
+        "status_all": "Tümü",
+        "status_faulty": "Hatalı",
+        "status_correct": "Doğru Çevrilmiş",
+        "admin_title": "🛠️ Kullanıcı Yönetimi",
+        "add_user_title": "Yeni Kullanıcı Ekle",
+        "role_select": "Yetki",
+        "create_user_btn": "Kullanıcı Oluştur",
+        "user_created": "Kullanıcı başarıyla oluşturuldu.",
+        "user_create_err": "Hata oluştu.",
+        "delete_user_btn": "Seçili Kullanıcıyı Sil",
+        "delete_self_err": "Kendinizi silemezsiniz!",
+        "model": "Model",
+        "season": "Sezon",
+        "part": "Parça",
+        "user": "Kullanıcı",
+        "date": "Tarih",
+        "status": "Durum",
+        "faulty_count": "Hatalı Sayısı",
+        "max_dev": "Max Sapma",
+        "detail": "Detay",
+        "result": "Sonuç"
+    },
+    "ENG": {
+        "app_title": "🏭 Pattern Measure Control System",
+        "login_title": "🔐 Login",
+        "username": "Username",
+        "password": "Password",
+        "login_btn": "Login",
+        "login_success": "Login Successful!",
+        "login_error": "Invalid username or password!",
+        "logout": "Logout",
+        "change_pass_title": "🔑 Change Password",
+        "curr_pass": "Current Password",
+        "new_pass": "New Password",
+        "confirm_pass": "Confirm New Password",
+        "update_pass_btn": "Update Password",
+        "pass_update_success": "Password updated successfully!",
+        "pass_update_error": "Error updating password.",
+        "pass_mismatch": "New passwords do not match!",
+        "pass_current_err": "Incorrect current password!",
+        "menu_header": "Menu",
+        "menu_manual": "New Control (Manual)",
+        "menu_excel": "Auto Control with Excel",
+        "menu_history": "History / Records",
+        "menu_admin": "User Management (Admin)",
+        "bu_select": "Select Business Unit (BU)",
+        "slot_count": "Part Count",
+        "gerber_header": "Gerber Data",
+        "pp_header": "Polypattern Data",
+        "analyze_btn": "🔍 Analyze",
+        "save_list_btn": "Add to List",
+        "finish_save_btn": "Finish & Save",
+        "save_success": "Saved!",
+        "error_parse": "Could not parse data.",
+        "excel_title": "📂 Multi-Model Control via Excel",
+        "excel_info": "File can contain multiple Gerber and Polypattern sheets.",
+        "upload_label": "Upload Excel File (.xlsx)",
+        "analyze_file_btn": "🚀 Analyze File",
+        "reset_btn": "🔄 Reset",
+        "save_all_btn": "💾 Save All Models",
+        "history_title": "📋 History Records",
+        "search_placeholder": "🔍 Search (Model, Season...)",
+        "filter_status": "Status Filter",
+        "status_all": "All",
+        "status_faulty": "Faulty",
+        "status_correct": "Correctly Converted",
+        "admin_title": "🛠️ User Management",
+        "add_user_title": "Add New User",
+        "role_select": "Role",
+        "create_user_btn": "Create User",
+        "user_created": "User created successfully.",
+        "user_create_err": "Error occurred.",
+        "delete_user_btn": "Delete Selected User",
+        "delete_self_err": "You cannot delete yourself!",
+        "model": "Model",
+        "season": "Season",
+        "part": "Part",
+        "user": "User",
+        "date": "Date",
+        "status": "Status",
+        "faulty_count": "Fault Count",
+        "max_dev": "Max Dev",
+        "detail": "Detail",
+        "result": "Result"
+    },
+    "ARB": {
+        "app_title": "🏭 نظام مراقبة قياس الأنماط",
+        "login_title": "🔐 تسجيل الدخول",
+        "username": "اسم المستخدم",
+        "password": "كلمة المرور",
+        "login_btn": "دخول",
+        "login_success": "تم تسجيل الدخول بنجاح!",
+        "login_error": "اسم المستخدم أو كلمة المرور غير صحيحة!",
+        "logout": "تسجيل الخروج",
+        "change_pass_title": "🔑 تغيير كلمة المرور",
+        "curr_pass": "كلمة المرور الحالية",
+        "new_pass": "كلمة المرور الجديدة",
+        "confirm_pass": "تأكيد كلمة المرور الجديدة",
+        "update_pass_btn": "تحديث كلمة المرور",
+        "pass_update_success": "تم تحديث كلمة المرور بنجاح!",
+        "pass_update_error": "حدث خطأ أثناء تحديث كلمة المرور.",
+        "pass_mismatch": "كلمات المرور الجديدة غير متطابقة!",
+        "pass_current_err": "كلمة المرور الحالية غير صحيحة!",
+        "menu_header": "القائمة",
+        "menu_manual": "فحص جديد (يدوي)",
+        "menu_excel": "فحص تلقائي عبر إكسل",
+        "menu_history": "السجل / المحفوظات",
+        "menu_admin": "إدارة المستخدمين (مسؤول)",
+        "bu_select": "اختر وحدة العمل (BU)",
+        "slot_count": "عدد القطع",
+        "gerber_header": "بيانات جربر",
+        "pp_header": "بيانات بولي باترن",
+        "analyze_btn": "🔍 تحليل",
+        "save_list_btn": "إضافة للقائمة",
+        "finish_save_btn": "إنهاء وحفظ",
+        "save_success": "تم الحفظ!",
+        "error_parse": "تعذر قراءة البيانات.",
+        "excel_title": "📂 فحص متعدد النماذج عبر إكسل",
+        "excel_info": "يمكن أن يحتوي الملف على أوراق متعددة.",
+        "upload_label": "تحميل ملف إكسل (.xlsx)",
+        "analyze_file_btn": "🚀 تحليل الملف",
+        "reset_btn": "🔄 إعادة تعيين",
+        "save_all_btn": "💾 حفظ جميع النماذج",
+        "history_title": "📋 سجلات المحفوظات",
+        "search_placeholder": "🔍 بحث (موديل، موسم...)",
+        "filter_status": "تصفية الحالة",
+        "status_all": "الكل",
+        "status_faulty": "معيب",
+        "status_correct": "تم التحويل بشكل صحيح",
+        "admin_title": "🛠️ إدارة المستخدمين",
+        "add_user_title": "إضافة مستخدم جديد",
+        "role_select": "الصلاحية",
+        "create_user_btn": "إنشاء مستخدم",
+        "user_created": "تم إنشاء المستخدم بنجاح.",
+        "user_create_err": "حدث خطأ.",
+        "delete_user_btn": "حذف المستخدم المحدد",
+        "delete_self_err": "لا يمكنك حذف نفسك!",
+        "model": "الموديل",
+        "season": "الموسم",
+        "part": "القطعة",
+        "user": "المستخدم",
+        "date": "التاريخ",
+        "status": "الحالة",
+        "faulty_count": "عدد الأخطاء",
+        "max_dev": "أقصى انحراف",
+        "detail": "التفاصيل",
+        "result": "النتيجة"
+    }
+}
 
 # Firebase başlatma (Secrets kullanarak)
 if not firebase_admin._apps:
@@ -331,6 +524,7 @@ def main():
     if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
     if 'username' not in st.session_state: st.session_state['username'] = ""
     if 'role' not in st.session_state: st.session_state['role'] = ""
+    if 'language' not in st.session_state: st.session_state['language'] = "TR"
     
     if 'current_model' not in st.session_state: st.session_state['current_model'] = {}
     if 'model_parts' not in st.session_state: st.session_state['model_parts'] = [] 
@@ -340,16 +534,30 @@ def main():
     # DB başlat ve varsayılan kullanıcı kontrolü
     init_users_db()
 
+    # Dil Kısayolu
+    t = TRANSLATIONS[st.session_state['language']]
+
+    # DİL SEÇİM BUTONLARI (ÜST KISIM)
+    # Üst kısımda sağa hizalı kolonlar
+    top_c1, top_c2, top_c3, top_c4 = st.columns([10, 1, 1, 1])
+    with top_c2:
+        if st.button("TR"): st.session_state['language'] = "TR"; st.rerun()
+    with top_c3:
+        if st.button("ENG"): st.session_state['language'] = "ENG"; st.rerun()
+    with top_c4:
+        if st.button("ARB"): st.session_state['language'] = "ARB"; st.rerun()
+
     # --- GİRİŞ EKRANI ---
     if not st.session_state['logged_in']:
-        st.title("🔐 Kalıp Ölçü Kontrol - Giriş")
+        st.title(t["app_title"])
+        st.header(t["login_title"])
         
         col1, col2, col3 = st.columns([1,2,1])
         with col2:
             with st.form("login_form"):
-                username_input = st.text_input("Kullanıcı Adı")
-                password_input = st.text_input("Şifre", type="password")
-                submit_login = st.form_submit_button("Giriş Yap")
+                username_input = st.text_input(t["username"])
+                password_input = st.text_input(t["password"], type="password")
+                submit_login = st.form_submit_button(t["login_btn"])
                 
                 if submit_login:
                     is_valid, role = login_user(username_input, password_input)
@@ -357,84 +565,87 @@ def main():
                         st.session_state['logged_in'] = True
                         st.session_state['username'] = username_input
                         st.session_state['role'] = role
-                        st.success("Giriş Başarılı!")
+                        st.success(t["login_success"])
                         st.rerun()
                     else:
-                        st.error("Kullanıcı adı veya şifre hatalı!")
+                        st.error(t["login_error"])
         return
 
     # --- ANA UYGULAMA (GİRİŞ YAPILDIKTAN SONRA) ---
     st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3022/3022329.png", width=100)
     st.sidebar.write(f"👤 **{st.session_state['username']}** ({st.session_state['role']})")
     
-    if st.sidebar.button("Çıkış Yap"):
+    if st.sidebar.button(t["logout"]):
         st.session_state['logged_in'] = False
         st.session_state['username'] = ""
         st.session_state['role'] = ""
         st.rerun()
 
     # --- ŞİFRE DEĞİŞTİRME ---
-    with st.sidebar.expander("🔑 Şifre Değiştir"):
+    with st.sidebar.expander(t["change_pass_title"]):
         with st.form("change_password_form"):
-            current_pass = st.text_input("Mevcut Şifre", type="password")
-            new_pass = st.text_input("Yeni Şifre", type="password")
-            confirm_pass = st.text_input("Yeni Şifre (Tekrar)", type="password")
-            submit_pass = st.form_submit_button("Şifreyi Güncelle")
+            current_pass = st.text_input(t["curr_pass"], type="password")
+            new_pass = st.text_input(t["new_pass"], type="password")
+            confirm_pass = st.text_input(t["confirm_pass"], type="password")
+            submit_pass = st.form_submit_button(t["update_pass_btn"])
             
             if submit_pass:
-                # 1. Mevcut şifreyi doğrula
                 is_valid, _ = login_user(st.session_state['username'], current_pass)
                 if not is_valid:
-                    st.error("Mevcut şifre hatalı!")
-                # 2. Yeni şifreleri kontrol et
+                    st.error(t["pass_current_err"])
                 elif new_pass != confirm_pass:
-                    st.error("Yeni şifreler eşleşmiyor!")
+                    st.error(t["pass_mismatch"])
                 elif not new_pass:
-                    st.error("Yeni şifre boş olamaz!")
-                # 3. Güncelle
+                    st.error("!")
                 else:
                     if update_password(st.session_state['username'], new_pass):
-                        st.success("Şifreniz başarıyla güncellendi!")
+                        st.success(t["pass_update_success"])
                     else:
-                        st.error("Şifre güncellenirken hata oluştu.")
+                        st.error(t["pass_update_error"])
 
-    # Menü Seçenekleri
-    menu_options = ["Yeni Ölçü Kontrolü (Manuel)", "Excel ile Otomatik Kontrol", "Kontrol Listesi / Geçmiş"]
+    # Menü Seçenekleri (Dil Çevirisine Göre Eşleme)
+    # Anahtar bazlı çalışmak daha güvenli
+    menu_keys = ["menu_manual", "menu_excel", "menu_history"]
     if st.session_state['role'] == 'admin':
-        menu_options.append("Kullanıcı Yönetimi (Admin)")
-        
-    menu = st.sidebar.radio("Menü", menu_options)
-
-    if menu == "Yeni Ölçü Kontrolü (Manuel)":
-        new_control_page()
-    elif menu == "Excel ile Otomatik Kontrol":
-        excel_control_page()
-    elif menu == "Kontrol Listesi / Geçmiş":
-        history_page()
-    elif menu == "Kullanıcı Yönetimi (Admin)":
-        admin_users_page()
-
-def admin_users_page():
-    st.header("🛠️ Kullanıcı Yönetimi")
+        menu_keys.append("menu_admin")
     
-    # Yeni Kullanıcı Ekle
-    with st.expander("Yeni Kullanıcı Ekle"):
+    # Görünen isimler
+    menu_labels = [t[k] for k in menu_keys]
+    
+    # Sidebar Başlık
+    st.sidebar.header(t["menu_header"])
+    selected_label = st.sidebar.radio("Navigation", menu_labels, label_visibility="collapsed")
+    
+    # Seçilen label'ın hangi key'e denk geldiğini bul
+    selected_key = menu_keys[menu_labels.index(selected_label)]
+
+    if selected_key == "menu_manual":
+        new_control_page(t)
+    elif selected_key == "menu_excel":
+        excel_control_page(t)
+    elif selected_key == "menu_history":
+        history_page(t)
+    elif selected_key == "menu_admin":
+        admin_users_page(t)
+
+def admin_users_page(t):
+    st.header(t["admin_title"])
+    
+    with st.expander(t["add_user_title"]):
         with st.form("add_user_form"):
-            new_user = st.text_input("Kullanıcı Adı")
-            new_pass = st.text_input("Şifre", type="password")
-            new_role = st.selectbox("Yetki", ["user", "admin"])
-            submitted = st.form_submit_button("Kullanıcı Oluştur")
+            new_user = st.text_input(t["username"])
+            new_pass = st.text_input(t["password"], type="password")
+            new_role = st.selectbox(t["role_select"], ["user", "admin"])
+            submitted = st.form_submit_button(t["create_user_btn"])
             
             if submitted:
                 if create_user(new_user, new_pass, new_role):
-                    st.success(f"Kullanıcı {new_user} başarıyla oluşturuldu.")
+                    st.success(t["user_created"])
                 else:
-                    st.error("Kullanıcı oluşturulurken hata oluştu (Veritabanı sorunu veya kullanıcı zaten var).")
+                    st.error(t["user_create_err"])
 
     st.divider()
-    st.subheader("Mevcut Kullanıcılar")
     
-    # Kullanıcıları Listele ve Sil
     if db:
         users = db.collection('users').stream()
         user_list = []
@@ -445,35 +656,33 @@ def admin_users_page():
             df_users = pd.DataFrame(user_list)
             st.dataframe(df_users[['username', 'role']], use_container_width=True)
             
-            user_to_delete = st.selectbox("Silinecek Kullanıcıyı Seçin", df_users['username'].unique())
-            if st.button("Seçili Kullanıcıyı Sil"):
+            user_to_delete = st.selectbox(t["delete_user_btn"], df_users['username'].unique())
+            if st.button("Sil / Delete"):
                 if user_to_delete == 'admin' or user_to_delete == st.session_state['username']:
-                    st.error("Kendinizi veya ana admin hesabını silemezsiniz!")
+                    st.error(t["delete_self_err"])
                 else:
                     delete_user(user_to_delete)
-                    st.success(f"{user_to_delete} silindi!")
+                    st.success(f"{user_to_delete} deleted!")
                     st.rerun()
 
-def excel_control_page():
-    st.header("📂 Excel ile Çoklu Model Kontrolü")
-    st.info("Dosya içerisinde istediğiniz kadar Gerber ve Polypattern sayfası (Gerber1, PP1, Gerber2...) bulunabilir. Sistem hepsini tarayıp modelleri otomatik eşleştirir.")
+def excel_control_page(t):
+    st.header(t["excel_title"])
+    st.info(t["excel_info"])
 
     col1, col2 = st.columns(2)
     with col1:
-        business_unit = st.selectbox("Business Unit (BU) Seçiniz", ["BU1", "BU3", "BU5"], key="excel_bu")
+        business_unit = st.selectbox(t["bu_select"], ["BU1", "BU3", "BU5"], key="excel_bu")
     
-    uploaded_file = st.file_uploader("Excel Dosyasını Yükleyin (.xlsx)", type=["xlsx"], key=f"uploader_{st.session_state['uploader_key']}")
+    uploaded_file = st.file_uploader(t["upload_label"], type=["xlsx"], key=f"uploader_{st.session_state['uploader_key']}")
 
     if uploaded_file:
-        if st.button("🚀 Dosyayı Analiz Et", type="primary"):
-            with st.spinner("Dosya taranıyor ve modeller ayrıştırılıyor..."):
+        if st.button(t["analyze_file_btn"], type="primary"):
+            with st.spinner("..."):
                 try:
                     xls = pd.read_excel(uploaded_file, sheet_name=None, header=None)
                     sheet_names = list(xls.keys())
-                    
                     all_gerber_parts = {}
                     all_pp_parts = {}
-                    
                     for sheet in sheet_names:
                         sheet_upper = sheet.upper()
                         df_sheet = xls[sheet]
@@ -482,8 +691,8 @@ def excel_control_page():
                         elif "PP" in sheet_upper or "POLY" in sheet_upper:
                             all_pp_parts.update(parse_excel_pp_sheet(df_sheet))
                     
-                    if not all_gerber_parts: st.error("Gerber verisi bulunamadı.")
-                    if not all_pp_parts: st.error("Polypattern verisi bulunamadı.")
+                    if not all_gerber_parts: st.error("Gerber?"); return
+                    if not all_pp_parts: st.error("Polypattern?"); return
                     
                     grouped_results = {}
                     for unique_id, pp_data in all_pp_parts.items():
@@ -502,15 +711,15 @@ def excel_control_page():
                             except: pass
                     
                     st.session_state['excel_results'] = grouped_results
-                    st.success(f"İşlem Tamam! Toplam {len(grouped_results)} farklı model bulundu.")
-                except Exception as e: st.error(f"Hata: {e}")
+                    st.success("OK")
+                except Exception as e: st.error(f"{t['error_parse']}: {e}")
 
     if st.session_state.get('excel_results'):
         results = st.session_state['excel_results']
-        st.divider(); st.subheader("📊 Analiz Sonuçları (Model Bazlı)")
+        st.divider(); st.subheader(t["result"])
         for model_key, model_data in results.items():
             with st.container():
-                st.info(f"📌 **Model:** {model_key} | **Parça Sayısı:** {len(model_data['parts'])}")
+                st.info(f"📌 {t['model']}: {model_key} | {t['slot_count']}: {len(model_data['parts'])}")
                 parts_list_for_save = []
                 has_fault = False
                 for part in model_data['parts']:
@@ -528,14 +737,14 @@ def excel_control_page():
 
         c_save, c_reset = st.columns([3, 1])
         with c_save:
-            if st.button("💾 Tüm Modelleri Kaydet", type="primary", use_container_width=True):
-                if not db: st.warning("DB Bağlantısı Yok"); return
+            if st.button(t["save_all_btn"], type="primary", use_container_width=True):
+                if not db: return
                 batch = db.batch(); cnt = 0
                 for mk, data in results.items():
                     sinfo = data['save_ready']
                     doc_ref = db.collection('qc_records').document()
                     doc_data = {
-                        'kullanici': st.session_state['username'], # Logged in user
+                        'kullanici': st.session_state['username'],
                         'tarih': datetime.now(),
                         'business_unit': business_unit,
                         'model_adi': data['model'],
@@ -545,78 +754,74 @@ def excel_control_page():
                         'parca_detaylari': sinfo['parts_list']
                     }
                     batch.set(doc_ref, doc_data); cnt += 1
-                batch.commit(); st.balloons(); st.success(f"{cnt} model kaydedildi!"); st.session_state['excel_results']={}; st.session_state['uploader_key']+=1; st.rerun()
+                batch.commit(); st.balloons(); st.success(t["save_success"]); st.session_state['excel_results']={}; st.session_state['uploader_key']+=1; st.rerun()
         with c_reset:
-            if st.button("🔄 Sıfırla", use_container_width=True): st.session_state['excel_results']={}; st.session_state['uploader_key']+=1; st.rerun()
+            if st.button(t["reset_btn"], use_container_width=True): st.session_state['excel_results']={}; st.session_state['uploader_key']+=1; st.rerun()
 
-def new_control_page():
-    st.header("Yeni Model Ölçü Kontrolü (Manuel)")
-    with st.expander("ℹ️ İşlem Bilgisi", expanded=True):
+def new_control_page(t):
+    st.header(t["menu_manual"])
+    with st.expander(t["detail"], expanded=True):
         c1, c2 = st.columns(2)
-        with c1: business_unit = st.selectbox("BU Seçiniz", ["BU1", "BU3", "BU5"])
-        with c2: slot_count = st.number_input("Parça Sayısı", 1, 5, 1)
+        with c1: business_unit = st.selectbox(t["bu_select"], ["BU1", "BU3", "BU5"])
+        with c2: slot_count = st.number_input(t["slot_count"], 1, 5, 1)
     
-    st.divider(); tabs = st.tabs([f"Parça {i+1}" for i in range(slot_count)]); inputs = {}
+    st.divider(); tabs = st.tabs([f"{t['part']} {i+1}" for i in range(slot_count)]); inputs = {}
     for i, tab in enumerate(tabs):
         with tab:
             c1, c2 = st.columns(2)
-            with c1: st.subheader("Gerber"); inputs[f"g_c_{i}"]=st.text_area("Çevre",key=f"g_c{i}",height=100); inputs[f"g_e_{i}"]=st.text_area("En",key=f"g_e{i}",height=100); inputs[f"g_b_{i}"]=st.text_area("Boy",key=f"g_b{i}",height=100)
-            with c2: st.subheader("Polypattern"); inputs[f"poly_{i}"]=st.text_area("Çıktı",key=f"p{i}",height=340)
+            with c1: st.subheader(t["gerber_header"]); inputs[f"g_c_{i}"]=st.text_area("Çevre/Circumference/المحيط",key=f"g_c{i}",height=100); inputs[f"g_e_{i}"]=st.text_area("En/Width/العرض",key=f"g_e{i}",height=100); inputs[f"g_b_{i}"]=st.text_area("Boy/Length/الطول",key=f"g_b{i}",height=100)
+            with c2: st.subheader(t["pp_header"]); inputs[f"poly_{i}"]=st.text_area("Data",key=f"p{i}",height=340)
 
     st.markdown("---")
-    if st.button("🔍 Analiz Et", type="primary", use_container_width=True):
+    if st.button(t["analyze_btn"], type="primary", use_container_width=True):
         st.session_state['analysis_results'] = {}
         for i in range(slot_count):
             gc=inputs[f"g_c_{i}"]; ge=inputs[f"g_e_{i}"]; gb=inputs[f"g_b_{i}"]; pp=inputs[f"poly_{i}"]
             if not (gc and ge and gb and pp): continue
-            
             if 'active_session' not in st.session_state:
                 meta = parse_gerber_metadata(gc)
                 if meta: st.session_state['active_session']=True; st.session_state['current_model']={"model_adi":meta['model_adi'],"sezon":meta['sezon'],"bu":business_unit}
-            
-            lmeta = parse_gerber_metadata(gc); pname = lmeta['parca_adi'] if lmeta else f"Parça {i+1}"
+            lmeta = parse_gerber_metadata(gc); pname = lmeta['parca_adi'] if lmeta else f"{t['part']} {i+1}"
             dfc = parse_gerber_table(gc,'cevre'); dfe = parse_gerber_table(ge,'en'); dfb = parse_gerber_table(gb,'boy'); dfp = parse_polypattern(pp)
-            
             if not dfc.empty and not dfe.empty and not dfb.empty and not dfp.empty:
                 try:
                     dft = dfc.merge(dfe, on="Beden").merge(dfb, on="Beden"); dff = dft.merge(dfp, on="Beden")
                     dff['Fark_Boy']=dff['boy']-dff['poly_boy']; dff['Fark_En']=dff['en']-dff['poly_en']; dff['Fark_Cevre']=dff['cevre']-dff['poly_cevre']
                     st.session_state['analysis_results'][i]={"df":dff, "parca_adi":pname, "saved":False}
-                except: st.error(f"Parça {i+1} hatası.")
+                except: st.error(f"{t['part']} {i+1} Err")
 
     if st.session_state.get('analysis_results'):
         for i, res in st.session_state['analysis_results'].items():
             if res['saved']: continue
-            with st.expander(f"Sonuç: {res['parca_adi']}", expanded=True):
+            with st.expander(f"{t['result']}: {res['parca_adi']}", expanded=True):
                 st.dataframe(res['df'])
-                if st.button(f"Ekle {i}", key=f"b_{i}"):
-                    st.session_state['model_parts'].append({"parca_adi":res['parca_adi'], "durum":"Doğru", "timestamp":datetime.now()}) #Basit kayıt
+                if st.button(f"{t['save_list_btn']} {i}", key=f"b_{i}"):
+                    st.session_state['model_parts'].append({"parca_adi":res['parca_adi'], "durum":"Doğru", "timestamp":datetime.now()}) 
                     st.session_state['analysis_results'][i]['saved']=True; st.rerun()
 
     if st.session_state.get('active_session') and st.session_state['model_parts']:
-        if st.button("Bitir ve Kaydet"): save_to_firestore(st.session_state['username'], business_unit)
+        if st.button(t["finish_save_btn"]): 
+            save_to_firestore(st.session_state['username'], business_unit, t)
 
-def save_to_firestore(user, bu):
+def save_to_firestore(user, bu, t):
     if not db: return
     mdata = st.session_state['current_model']; parts = st.session_state['model_parts']
     genel = "Doğru Çevrilmiş"
-    # Hata kontrolü basitçe manuelde eklenmediyse diye varsayalım, detaylı eklenebilir.
     db.collection('qc_records').add({
         'kullanici': user, 'tarih': datetime.now(), 'business_unit': bu,
         'model_adi': mdata.get('model_adi'), 'sezon': mdata.get('sezon'),
         'parca_sayisi': len(parts), 'genel_durum': genel, 'parca_detaylari': parts
     })
-    st.success("Kaydedildi!"); st.session_state['model_parts']=[]; st.session_state['current_model']={}; st.session_state['analysis_results']={}; del st.session_state['active_session']; st.rerun()
+    st.success(t["save_success"]); st.session_state['model_parts']=[]; st.session_state['current_model']={}; st.session_state['analysis_results']={}; del st.session_state['active_session']; st.rerun()
 
-def history_page():
-    st.header("📋 Geçmiş Kayıtlar")
+def history_page(t):
+    st.header(t["history_title"])
     if not db: st.warning("DB Yok"); return
     
     c1, c2 = st.columns(2)
-    term = c1.text_input("🔍 Ara")
-    status = c2.selectbox("Filtre", ["Tümü", "Hatalı", "Doğru Çevrilmiş"])
+    term = c1.text_input(t["search_placeholder"])
+    status = c2.selectbox(t["filter_status"], [t["status_all"], t["status_faulty"], t["status_correct"]])
     
-    # SORGULAMA MANTIĞI: Admin her şeyi görür, User sadece kendisininkini.
     query = db.collection('qc_records')
     if st.session_state['role'] != 'admin':
         query = query.where('kullanici', '==', st.session_state['username'])
@@ -627,11 +832,9 @@ def history_page():
     data = []
     for doc in docs:
         d = doc.to_dict(); d['id'] = doc.id
-        # Hata Analizi
         parts = d.get('parca_detaylari', [])
         faults = [p for p in parts if p.get('durum') == 'Hatalı']
         d['hatali_sayi'] = len(faults)
-        
         max_dev = 0.0; summaries = []
         for p in faults:
             p_errs = []
@@ -645,38 +848,43 @@ def history_page():
                 if abs(fc)>0.05: errs.append(f"Çv:{fc:.2f}")
                 if errs: p_errs.append(f"{det.get('Beden','?')}[{','.join(errs)}]")
             if p_errs: summaries.append(f"{p.get('parca_adi')}: {' '.join(p_errs)}")
-        
         d['hata_ozeti'] = " | ".join(summaries)
         d['max_sapma'] = max_dev
         d['tarih_str'] = pd.to_datetime(d['tarih']).strftime('%Y-%m-%d %H:%M') if d.get('tarih') else "-"
         data.append(d)
 
-    if not data: st.info("Kayıt bulunamadı."); return
-    
+    if not data: st.info("..."); return
     df = pd.DataFrame(data)
     
-    # Filtreleme (Python tarafında)
     if term:
-        t = term.lower()
-        df = df[df['model_adi'].str.lower().str.contains(t, na=False) | df['sezon'].str.lower().str.contains(t, na=False)]
-    if status != "Tümü":
-        df = df[df['genel_durum'] == status]
+        t_term = term.lower()
+        df = df[df['model_adi'].str.lower().str.contains(t_term, na=False) | df['sezon'].str.lower().str.contains(t_term, na=False)]
+    
+    # Durum filtresi çeviriye duyarlı hale getirilmeli
+    # DB'de kayıtlı değerler: "Hatalı", "Doğru Çevrilmiş" (Bunlar hardcoded kalıyor logic değişmesin diye)
+    # Filtre seçimleri ise translate edilmiş.
+    
+    db_status_map = {t["status_faulty"]: "Hatalı", t["status_correct"]: "Doğru Çevrilmiş"}
+    
+    if status != t["status_all"]:
+        db_val = db_status_map.get(status, status)
+        df = df[df['genel_durum'] == db_val]
         
-    disp_cols = {'tarih_str':'Tarih', 'kullanici':'Kullanıcı', 'business_unit':'BU', 'model_adi':'Model', 'sezon':'Sezon', 'genel_durum':'Durum', 'hatali_sayi':'Hatalı Parça', 'max_sapma':'Max Sapma', 'hata_ozeti':'Detay'}
+    disp_cols = {'tarih_str':t["date"], 'kullanici':t["user"], 'business_unit':'BU', 'model_adi':t["model"], 'sezon':t["season"], 'genel_durum':t["status"], 'hatali_sayi':t["faulty_count"], 'max_sapma':t["max_dev"], 'hata_ozeti':t["detail"]}
     used_cols = [c for c in disp_cols.keys() if c in df.columns]
     
-    st.dataframe(df[used_cols].rename(columns=disp_cols).style.applymap(lambda x: 'color:red;font-weight:bold' if x=='Hatalı' else ('color:green;font-weight:bold' if x=='Doğru Çevrilmiş' else ''), subset=['Durum']), use_container_width=True)
+    st.dataframe(df[used_cols].rename(columns=disp_cols).style.applymap(lambda x: 'color:red;font-weight:bold' if x=='Hatalı' else ('color:green;font-weight:bold' if x=='Doğru Çevrilmiş' else ''), subset=[t['status']]), use_container_width=True)
     
-    st.markdown("---"); st.subheader("🔍 Detay İncele")
+    st.markdown("---"); st.subheader(f"🔍 {t['detail']}")
     opts = df.apply(lambda x: f"{x['model_adi']} ({x['sezon']}) - {x['tarih_str']}", axis=1).tolist()
-    sel = st.selectbox("Seç:", opts)
+    sel = st.selectbox("Select", opts, label_visibility="collapsed")
     if sel:
         row = df.iloc[opts.index(sel)]
-        c1,c2,c3 = st.columns(3); c1.info(f"Model: {row['model_adi']}"); c2.info(f"User: {row['kullanici']}"); c3.info(f"Tarih: {row['tarih_str']}")
+        c1,c2,c3 = st.columns(3); c1.info(f"{t['model']}: {row['model_adi']}"); c2.info(f"{t['user']}: {row['kullanici']}"); c3.info(f"{t['date']}: {row['tarih_str']}")
         for p in row.get('parca_detaylari', []):
             with st.expander(f"{'⚠️' if p['durum']=='Hatalı' else '✅'} {p['parca_adi']}"):
                 if p['durum']=='Hatalı': st.dataframe(pd.DataFrame(p.get('hata_detayi',[])))
-                else: st.success("Sorunsuz")
+                else: st.success("OK")
 
 if __name__ == "__main__":
     main()
