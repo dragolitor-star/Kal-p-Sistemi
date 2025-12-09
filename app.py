@@ -5,7 +5,12 @@ from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 import io
-import hashlib  # Şifreleme için
+import hashlib
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import random
+import string
 
 # --------------------------------------------------------------------------
 # 1. AYARLAR VE DİL SÖZLÜĞÜ
@@ -19,7 +24,14 @@ TRANSLATIONS = {
         "login_title": "🔐 Giriş Yap",
         "username": "Kullanıcı Adı",
         "password": "Şifre",
+        "email": "E-posta Adresi",
         "login_btn": "Giriş Yap",
+        "forgot_pass_btn": "Şifremi Unuttum",
+        "reset_pass_header": "🔑 Şifre Sıfırlama",
+        "reset_pass_btn": "Yeni Şifre Gönder",
+        "reset_success": "Yeni şifreniz e-posta adresinize gönderildi.",
+        "reset_error_mail": "E-posta gönderilirken hata oluştu.",
+        "reset_error_user": "Bu e-posta adresiyle kayıtlı kullanıcı bulunamadı.",
         "login_success": "Giriş Başarılı!",
         "login_error": "Kullanıcı adı veya şifre hatalı!",
         "logout": "Çıkış Yap",
@@ -82,7 +94,14 @@ TRANSLATIONS = {
         "login_title": "🔐 Login",
         "username": "Username",
         "password": "Password",
+        "email": "Email Address",
         "login_btn": "Login",
+        "forgot_pass_btn": "Forgot Password",
+        "reset_pass_header": "🔑 Reset Password",
+        "reset_pass_btn": "Send New Password",
+        "reset_success": "New password sent to your email.",
+        "reset_error_mail": "Error sending email.",
+        "reset_error_user": "No user found with this email address.",
         "login_success": "Login Successful!",
         "login_error": "Invalid username or password!",
         "logout": "Logout",
@@ -145,7 +164,14 @@ TRANSLATIONS = {
         "login_title": "🔐 تسجيل الدخول",
         "username": "اسم المستخدم",
         "password": "كلمة المرور",
+        "email": "البريد الإلكتروني",
         "login_btn": "دخول",
+        "forgot_pass_btn": "نسيت كلمة المرور",
+        "reset_pass_header": "🔑 إعادة تعيين كلمة المرور",
+        "reset_pass_btn": "إرسال كلمة مرور جديدة",
+        "reset_success": "تم إرسال كلمة المرور الجديدة إلى بريدك الإلكتروني.",
+        "reset_error_mail": "حدث خطأ أثناء إرسال البريد الإلكتروني.",
+        "reset_error_user": "لم يتم العثور على مستخدم بهذا البريد الإلكتروني.",
         "login_success": "تم تسجيل الدخول بنجاح!",
         "login_error": "اسم المستخدم أو كلمة المرور غير صحيحة!",
         "logout": "تسجيل الخروج",
@@ -227,7 +253,7 @@ except:
     db = None 
 
 # --------------------------------------------------------------------------
-# 2. KULLANICI YÖNETİMİ VE GÜVENLİK FONKSİYONLARI
+# 2. KULLANICI YÖNETİMİ, GÜVENLİK VE MAİL FONKSİYONLARI
 # --------------------------------------------------------------------------
 
 def make_hashes(password):
@@ -240,41 +266,101 @@ def check_hashes(password, hashed_text):
         return hashed_text
     return False
 
+def generate_random_password(length=8):
+    """Rastgele geçici şifre oluşturur."""
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choice(characters) for i in range(length))
+
+def send_email(to_email, subject, body):
+    """SMTP ile e-posta gönderir."""
+    try:
+        # Secrets'tan mail bilgilerini al
+        # .streamlit/secrets.toml içinde [email] bölümü olmalı
+        # gmail_user = "sizin@gmail.com", gmail_password = "uygulama_sifresi"
+        gmail_user = st.secrets["email"]["gmail_user"]
+        gmail_password = st.secrets["email"]["gmail_password"]
+
+        msg = MIMEMultipart()
+        msg['From'] = gmail_user
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(gmail_user, gmail_password)
+        text = msg.as_string()
+        server.sendmail(gmail_user, to_email, text)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Mail gönderme hatası: {e}")
+        return False
+
+def reset_password_flow(email):
+    """E-posta adresine göre şifre sıfırlar ve mail atar."""
+    if not db: return False, "DB_ERR"
+    
+    # E-posta ile kullanıcıyı bul
+    users_ref = db.collection('users')
+    query = users_ref.where('email', '==', email).stream()
+    
+    found_user_doc = None
+    for doc in query:
+        found_user_doc = doc
+        break
+    
+    if found_user_doc:
+        new_temp_pass = generate_random_password()
+        username = found_user_doc.id # Document ID kullanıcı adıdır
+        
+        # Veritabanını güncelle
+        update_password(username, new_temp_pass)
+        
+        # Mail gönder
+        subject = "Kalıp Kontrol Sistemi - Şifre Sıfırlama / Password Reset"
+        body = f"Merhaba,\n\nKullanıcı Adınız: {username}\nYeni Şifreniz: {new_temp_pass}\n\nLütfen giriş yaptıktan sonra şifrenizi değiştirin.\n\nHello,\n\nUsername: {username}\nNew Password: {new_temp_pass}\n\nPlease change your password after login."
+        
+        if send_email(email, subject, body):
+            return True, "SUCCESS"
+        else:
+            return False, "MAIL_ERR"
+    else:
+        return False, "USER_NOT_FOUND"
+
 def init_users_db():
     """Eğer veritabanında kullanıcı tablosu yoksa varsayılan admin oluşturur."""
     if db:
         users_ref = db.collection('users')
-        # Koleksiyonda en az 1 döküman var mı kontrol et
         docs = users_ref.limit(1).stream()
         if not any(docs):
-            # Varsayılan Admin: admin / 1234
             users_ref.document('admin').set({
                 'username': 'admin',
                 'password': make_hashes('1234'),
-                'role': 'admin'
+                'role': 'admin',
+                'email': 'admin@example.com' # Varsayılan mail
             })
 
 def login_user(username, password):
     """Giriş işlemini kontrol eder."""
     if not db: return None, None
-    
     doc_ref = db.collection('users').document(username)
     doc = doc_ref.get()
-    
     if doc.exists:
         user_data = doc.to_dict()
         if check_hashes(password, user_data['password']):
             return True, user_data['role']
     return False, None
 
-def create_user(username, password, role):
-    """Yeni kullanıcı oluşturur."""
+def create_user(username, password, role, email):
+    """Yeni kullanıcı oluşturur (Email ile)."""
     if not db: return False
     try:
         db.collection('users').document(username).set({
             'username': username,
             'password': make_hashes(password),
-            'role': role
+            'role': role,
+            'email': email
         })
         return True
     except:
@@ -530,6 +616,7 @@ def main():
     if 'model_parts' not in st.session_state: st.session_state['model_parts'] = [] 
     if 'excel_results' not in st.session_state: st.session_state['excel_results'] = {} 
     if 'uploader_key' not in st.session_state: st.session_state['uploader_key'] = 0
+    if 'show_reset_form' not in st.session_state: st.session_state['show_reset_form'] = False
 
     # DB başlat ve varsayılan kullanıcı kontrolü
     init_users_db()
@@ -538,7 +625,6 @@ def main():
     t = TRANSLATIONS[st.session_state['language']]
 
     # DİL SEÇİM BUTONLARI (ÜST KISIM)
-    # Üst kısımda sağa hizalı kolonlar
     top_c1, top_c2, top_c3, top_c4 = st.columns([10, 1, 1, 1])
     with top_c2:
         if st.button("TR"): st.session_state['language'] = "TR"; st.rerun()
@@ -554,6 +640,7 @@ def main():
         
         col1, col2, col3 = st.columns([1,2,1])
         with col2:
+            # Giriş Formu
             with st.form("login_form"):
                 username_input = st.text_input(t["username"])
                 password_input = st.text_input(t["password"], type="password")
@@ -569,6 +656,32 @@ def main():
                         st.rerun()
                     else:
                         st.error(t["login_error"])
+            
+            # Şifremi Unuttum Toggle Butonu
+            if st.button(t["forgot_pass_btn"], type="secondary"):
+                st.session_state['show_reset_form'] = not st.session_state['show_reset_form']
+            
+            # Şifre Sıfırlama Formu (Toggle edilebilir)
+            if st.session_state['show_reset_form']:
+                st.markdown("---")
+                st.subheader(t["reset_pass_header"])
+                with st.form("reset_form"):
+                    email_input = st.text_input(t["email"])
+                    submit_reset = st.form_submit_button(t["reset_pass_btn"])
+                    
+                    if submit_reset:
+                        if email_input:
+                            success, msg = reset_password_flow(email_input)
+                            if success:
+                                st.success(t["reset_success"])
+                            else:
+                                if msg == "USER_NOT_FOUND":
+                                    st.error(t["reset_error_user"])
+                                else:
+                                    st.error(t["reset_error_mail"])
+                        else:
+                            st.warning("Lütfen e-posta adresinizi giriniz.")
+
         return
 
     # --- ANA UYGULAMA (GİRİŞ YAPILDIKTAN SONRA) ---
@@ -603,20 +716,14 @@ def main():
                     else:
                         st.error(t["pass_update_error"])
 
-    # Menü Seçenekleri (Dil Çevirisine Göre Eşleme)
-    # Anahtar bazlı çalışmak daha güvenli
+    # Menü Seçenekleri
     menu_keys = ["menu_manual", "menu_excel", "menu_history"]
     if st.session_state['role'] == 'admin':
         menu_keys.append("menu_admin")
     
-    # Görünen isimler
     menu_labels = [t[k] for k in menu_keys]
-    
-    # Sidebar Başlık
     st.sidebar.header(t["menu_header"])
     selected_label = st.sidebar.radio("Navigation", menu_labels, label_visibility="collapsed")
-    
-    # Seçilen label'ın hangi key'e denk geldiğini bul
     selected_key = menu_keys[menu_labels.index(selected_label)]
 
     if selected_key == "menu_manual":
@@ -636,10 +743,11 @@ def admin_users_page(t):
             new_user = st.text_input(t["username"])
             new_pass = st.text_input(t["password"], type="password")
             new_role = st.selectbox(t["role_select"], ["user", "admin"])
+            new_email = st.text_input(t["email"])
             submitted = st.form_submit_button(t["create_user_btn"])
             
             if submitted:
-                if create_user(new_user, new_pass, new_role):
+                if create_user(new_user, new_pass, new_role, new_email):
                     st.success(t["user_created"])
                 else:
                     st.error(t["user_create_err"])
@@ -654,7 +762,11 @@ def admin_users_page(t):
         
         if user_list:
             df_users = pd.DataFrame(user_list)
-            st.dataframe(df_users[['username', 'role']], use_container_width=True)
+            # Email sütununu da göster
+            if 'email' in df_users.columns:
+                st.dataframe(df_users[['username', 'role', 'email']], use_container_width=True)
+            else:
+                st.dataframe(df_users[['username', 'role']], use_container_width=True)
             
             user_to_delete = st.selectbox(t["delete_user_btn"], df_users['username'].unique())
             if st.button("Sil / Delete"):
