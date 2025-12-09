@@ -48,7 +48,7 @@ TRANSLATIONS = {
         "menu_manual": "Yeni Ölçü Kontrolü (Manuel)",
         "menu_excel": "Excel ile Otomatik Kontrol",
         "menu_history": "Kontrol Listesi / Geçmiş",
-        "menu_admin": "Kullanıcı Yönetimi (Admin)",
+        "menu_admin": "Yönetici Paneli (Admin)",
         "bu_select": "Business Unit (BU) Seçiniz",
         "slot_count": "Parça Sayısı",
         "gerber_header": "Gerber Verileri",
@@ -70,7 +70,7 @@ TRANSLATIONS = {
         "status_all": "Tümü",
         "status_faulty": "Hatalı",
         "status_correct": "Doğru Çevrilmiş",
-        "admin_title": "🛠️ Kullanıcı Yönetimi",
+        "admin_title": "🛠️ Yönetici Paneli",
         "add_user_title": "Yeni Kullanıcı Ekle",
         "role_select": "Yetki",
         "create_user_btn": "Kullanıcı Oluştur",
@@ -78,6 +78,10 @@ TRANSLATIONS = {
         "user_create_err": "Hata oluştu.",
         "delete_user_btn": "Seçili Kullanıcıyı Sil",
         "delete_self_err": "Kendinizi silemezsiniz!",
+        "settings_title": "⚙️ Sistem Ayarları",
+        "tolerance_label": "Hata Toleransı (cm)",
+        "save_settings_btn": "Ayarları Kaydet",
+        "settings_saved": "Ayarlar güncellendi!",
         "model": "Model",
         "season": "Sezon",
         "part": "Parça",
@@ -118,7 +122,7 @@ TRANSLATIONS = {
         "menu_manual": "New Control (Manual)",
         "menu_excel": "Auto Control with Excel",
         "menu_history": "History / Records",
-        "menu_admin": "User Management (Admin)",
+        "menu_admin": "Admin Panel",
         "bu_select": "Select Business Unit (BU)",
         "slot_count": "Part Count",
         "gerber_header": "Gerber Data",
@@ -140,7 +144,7 @@ TRANSLATIONS = {
         "status_all": "All",
         "status_faulty": "Faulty",
         "status_correct": "Correctly Converted",
-        "admin_title": "🛠️ User Management",
+        "admin_title": "🛠️ Admin Panel",
         "add_user_title": "Add New User",
         "role_select": "Role",
         "create_user_btn": "Create User",
@@ -148,6 +152,10 @@ TRANSLATIONS = {
         "user_create_err": "Error occurred.",
         "delete_user_btn": "Delete Selected User",
         "delete_self_err": "You cannot delete yourself!",
+        "settings_title": "⚙️ System Settings",
+        "tolerance_label": "Tolerance Threshold (cm)",
+        "save_settings_btn": "Save Settings",
+        "settings_saved": "Settings updated!",
         "model": "Model",
         "season": "Season",
         "part": "Part",
@@ -218,6 +226,10 @@ TRANSLATIONS = {
         "user_create_err": "حدث خطأ.",
         "delete_user_btn": "حذف المستخدم المحدد",
         "delete_self_err": "لا يمكنك حذف نفسك!",
+        "settings_title": "⚙️ إعدادات النظام",
+        "tolerance_label": "عتبة التسامح (سم)",
+        "save_settings_btn": "حفظ الإعدادات",
+        "settings_saved": "تم تحديث الإعدادات!",
         "model": "الموديل",
         "season": "الموسم",
         "part": "القطعة",
@@ -386,6 +398,34 @@ def update_password(username, new_password):
         db.collection('users').document(username).update({
             'password': make_hashes(new_password)
         })
+        return True
+    except:
+        return False
+
+# --- YENİ EKLENEN FONKSİYONLAR: AYARLAR YÖNETİMİ ---
+def get_system_config():
+    """Sistem ayarlarını (tolerans vb.) çeker."""
+    default_config = {'tolerance': 0.25}
+    if not db: return default_config
+    try:
+        doc = db.collection('settings').document('config').get()
+        if doc.exists:
+            data = doc.to_dict()
+            # Eğer DB'de tolerance alanı yoksa varsayılanı kullan
+            if 'tolerance' not in data:
+                return default_config
+            return data
+        return default_config
+    except:
+        return default_config
+
+def update_system_config(tolerance):
+    """Admin tarafından tolerans değerini günceller."""
+    if not db: return False
+    try:
+        db.collection('settings').document('config').set({
+            'tolerance': float(tolerance)
+        }, merge=True)
         return True
     except:
         return False
@@ -743,6 +783,28 @@ def main():
 def admin_users_page(t):
     st.header(t["admin_title"])
     
+    # --- YENİ EKLENEN: SİSTEM AYARLARI (TOLERANS) ---
+    st.subheader(t["settings_title"])
+    with st.container(border=True):
+        current_config = get_system_config()
+        current_tol = current_config.get('tolerance', 0.25)
+        
+        st.info(f"Mevcut Sistem Toleransı: **{current_tol} cm**")
+        
+        with st.form("settings_form"):
+            new_tol = st.number_input(t["tolerance_label"], value=float(current_tol), step=0.01, format="%.2f")
+            save_btn = st.form_submit_button(t["save_settings_btn"])
+            
+            if save_btn:
+                if update_system_config(new_tol):
+                    st.success(t["settings_saved"])
+                    st.rerun()
+                else:
+                    st.error("Hata oluştu.")
+    
+    st.divider()
+    
+    # --- KULLANICI YÖNETİMİ ---
     with st.expander(t["add_user_title"]):
         with st.form("add_user_form"):
             new_user = st.text_input(t["username"])
@@ -785,6 +847,11 @@ def admin_users_page(t):
 def excel_control_page(t):
     st.header(t["excel_title"])
     st.info(t["excel_info"])
+
+    # --- SİSTEM TOLERANSINI ÇEK ---
+    system_config = get_system_config()
+    tolerans = system_config.get('tolerance', 0.25)
+    st.markdown(f"**ℹ️ Aktif Hata Toleransı / Active Tolerance:** `{tolerans} cm`")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -840,10 +907,13 @@ def excel_control_page(t):
                 parts_list_for_save = []
                 has_fault = False
                 for part in model_data['parts']:
-                    df = part['df']; parca_adi = part['parca_adi']; tolerans = 0.05
+                    df = part['df']; parca_adi = part['parca_adi']
+                    
+                    # TOLERANS KONTROLÜ (DB'den gelen değer kullanılıyor)
                     hatali_satirlar = df[(df['Fark_Boy'].abs()>tolerans)|(df['Fark_En'].abs()>tolerans)|(df['Fark_Cevre'].abs()>tolerans)]
                     hata_var = not hatali_satirlar.empty
                     if hata_var: has_fault = True
+                    
                     with st.expander(f"{'⚠️' if hata_var else '✅'} {parca_adi}", expanded=hata_var):
                         cols = ['boy','poly_boy','en','poly_en','cevre','poly_cevre','Fark_Boy','Fark_En','Fark_Cevre']
                         ex_cols = [c for c in cols if c in df.columns]
@@ -885,9 +955,10 @@ def new_control_page(t):
     st.divider(); tabs = st.tabs([f"{t['part']} {i+1}" for i in range(slot_count)]); inputs = {}
     for i, tab in enumerate(tabs):
         with tab:
-            c1, c2 = st.columns(2)
-            with c1: st.subheader(t["gerber_header"]); inputs[f"g_c_{i}"]=st.text_area("Çevre/Circumference/المحيط",key=f"g_c{i}",height=100); inputs[f"g_e_{i}"]=st.text_area("En/Width/العرض",key=f"g_e{i}",height=100); inputs[f"g_b_{i}"]=st.text_area("Boy/Length/الطول",key=f"g_b{i}",height=100)
-            with c2: st.subheader(t["pp_header"]); inputs[f"poly_{i}"]=st.text_area("Data",key=f"p{i}",height=340)
+            with st.container():
+                c1, c2 = st.columns(2)
+                with c1: st.subheader(t["gerber_header"]); inputs[f"g_c_{i}"]=st.text_area("Çevre/Circumference/المحيط",key=f"g_c{i}",height=100); inputs[f"g_e_{i}"]=st.text_area("En/Width/العرض",key=f"g_e{i}",height=100); inputs[f"g_b_{i}"]=st.text_area("Boy/Length/الطول",key=f"g_b{i}",height=100)
+                with c2: st.subheader(t["pp_header"]); inputs[f"poly_{i}"]=st.text_area("Data",key=f"p{i}",height=340)
 
     st.markdown("---")
     if st.button(t["analyze_btn"], type="primary", use_container_width=True):
@@ -947,6 +1018,10 @@ def history_page(t):
     docs = query.stream()
     
     data = []
+    # DB'den toleransı çek (sadece gösterim/hesaplama gerekirse diye)
+    sys_conf = get_system_config()
+    current_tol = sys_conf.get('tolerance', 0.25)
+
     for doc in docs:
         d = doc.to_dict(); d['id'] = doc.id
         parts = d.get('parca_detaylari', [])
@@ -960,9 +1035,12 @@ def history_page(t):
                 curr_max = max(abs(fb), abs(fe), abs(fc))
                 if curr_max > max_dev: max_dev = curr_max
                 errs = []
-                if abs(fb)>0.05: errs.append(f"Boy:{fb:.2f}")
-                if abs(fe)>0.05: errs.append(f"En:{fe:.2f}")
-                if abs(fc)>0.05: errs.append(f"Çv:{fc:.2f}")
+                # Burada tolerans esnek olabilir ama geçmiş kayıt olduğu için
+                # o anki duruma göre kaydedilmiş veri gösterilir.
+                # Yine de detayda vurgulamak için güncel toleransı kullanabiliriz
+                if abs(fb)>current_tol: errs.append(f"Boy:{fb:.2f}")
+                if abs(fe)>current_tol: errs.append(f"En:{fe:.2f}")
+                if abs(fc)>current_tol: errs.append(f"Çv:{fc:.2f}")
                 if errs: p_errs.append(f"{det.get('Beden','?')}[{','.join(errs)}]")
             if p_errs: summaries.append(f"{p.get('parca_adi')}: {' '.join(p_errs)}")
         d['hata_ozeti'] = " | ".join(summaries)
@@ -976,10 +1054,6 @@ def history_page(t):
     if term:
         t_term = term.lower()
         df = df[df['model_adi'].str.lower().str.contains(t_term, na=False) | df['sezon'].str.lower().str.contains(t_term, na=False)]
-    
-    # Durum filtresi çeviriye duyarlı hale getirilmeli
-    # DB'de kayıtlı değerler: "Hatalı", "Doğru Çevrilmiş" (Bunlar hardcoded kalıyor logic değişmesin diye)
-    # Filtre seçimleri ise translate edilmiş.
     
     db_status_map = {t["status_faulty"]: "Hatalı", t["status_correct"]: "Doğru Çevrilmiş"}
     
