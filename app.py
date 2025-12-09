@@ -274,9 +274,10 @@ def generate_random_password(length=8):
 def send_email(to_email, subject, body):
     """SMTP ile e-posta gönderir."""
     try:
-        # Secrets'tan mail bilgilerini al
-        # .streamlit/secrets.toml içinde [email] bölümü olmalı
-        # gmail_user = "sizin@gmail.com", gmail_password = "uygulama_sifresi"
+        # Secrets kontrolü
+        if "email" not in st.secrets:
+            return False, "Secrets dosyasında [email] bölümü eksik."
+            
         gmail_user = st.secrets["email"]["gmail_user"]
         gmail_password = st.secrets["email"]["gmail_password"]
 
@@ -286,16 +287,18 @@ def send_email(to_email, subject, body):
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
 
+        # SMTP Bağlantısı
         server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
+        server.ehlo() # Sunucuyu selamla
+        server.starttls() # Güvenli bağlantıyı başlat
+        server.ehlo()
         server.login(gmail_user, gmail_password)
         text = msg.as_string()
         server.sendmail(gmail_user, to_email, text)
         server.quit()
-        return True
+        return True, None
     except Exception as e:
-        print(f"Mail gönderme hatası: {e}")
-        return False
+        return False, str(e)
 
 def reset_password_flow(email):
     """E-posta adresine göre şifre sıfırlar ve mail atar."""
@@ -321,10 +324,11 @@ def reset_password_flow(email):
         subject = "Kalıp Kontrol Sistemi - Şifre Sıfırlama / Password Reset"
         body = f"Merhaba,\n\nKullanıcı Adınız: {username}\nYeni Şifreniz: {new_temp_pass}\n\nLütfen giriş yaptıktan sonra şifrenizi değiştirin.\n\nHello,\n\nUsername: {username}\nNew Password: {new_temp_pass}\n\nPlease change your password after login."
         
-        if send_email(email, subject, body):
+        success, err_msg = send_email(email, subject, body)
+        if success:
             return True, "SUCCESS"
         else:
-            return False, "MAIL_ERR"
+            return False, f"MAIL_ERR: {err_msg}"
     else:
         return False, "USER_NOT_FOUND"
 
@@ -678,7 +682,8 @@ def main():
                                 if msg == "USER_NOT_FOUND":
                                     st.error(t["reset_error_user"])
                                 else:
-                                    st.error(t["reset_error_mail"])
+                                    # Detaylı hata mesajını göster
+                                    st.error(f"{t['reset_error_mail']} \nDetay: {msg}")
                         else:
                             st.warning("Lütfen e-posta adresinizi giriniz.")
 
